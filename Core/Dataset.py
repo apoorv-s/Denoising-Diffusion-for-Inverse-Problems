@@ -32,6 +32,11 @@ class BraninDataset(Dataset):
         y = self.func(x)
         return {'x':x, 'y':y}
     
+    def GetEvalData(self):
+        # TBD
+        pass
+    
+    
     
         
         
