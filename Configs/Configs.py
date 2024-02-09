@@ -22,5 +22,10 @@ class BraninConfig:
     
     conditioningWeights = [0, 0.5, 2]
     
+    dropProb = 0.1
+    nT = 500
+    
+    # Noise Schedule:
+    beta = (1e-4, 0.02)
     
     
