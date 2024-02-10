@@ -47,11 +47,15 @@ class DiffusionModel():
         # omAlphaOverSqrtOmAb = (1 - alpha)/sqrtOneMinusAlphaBar
         
         return dict(sqrtAlpha=sqrtAlpha, sqrtOneMinusAlphaBar=sqrtOneMinusAlphaBar)
+    
+    def GetCosineNoiseSchedule(self):
+        pass
 
 class ResidualBlockWithTimeScaling(nn.Module):
     def __init__(self, nnf, inpDim, nHidDims, actFnName, outDim, timeDim,
                  actLyrName, wtNormInd) -> None:
-        super().__init__()        
+        super().__init__()
+        
         self.block1 = nnf.LinearLayer(inpDim, nHidDims, wtNormInd)
         self.actLyr1 = nnf.GetActLayer(actLyrName)(nHidDims)
         self.actFn1 = nnf.GetActFn(actFnName)()
@@ -59,16 +63,17 @@ class ResidualBlockWithTimeScaling(nn.Module):
         self.block2 = nnf.LinearLayer(nHidDims, outDim, wtNormInd)
         self.actLyr2 = nnf.GetActLayer(actLyrName)(outDim)
         self.actFn2 = nnf.GetActFn(actFnName)()
+        
         self.tBlock = nn.Sequential(nnf.GetActFn(actFnName)(),
                                     nn.Linear(timeDim, 2*nHidDims))
             
-    def forward(self, xInp, tInp):
+    def forward(self, xInp, tInp=None): # x: (B, 2*hidDim), t: (B, hidDim)
         x = self.block1(xInp)
         x = self.actLyr1(x)
         if tInp is not None:
             tScaleNShift = self.tBlock(tInp)
-            tScale, tShift = tScaleNShift.chunk(2, dim=1) # Assuming input is always batch
-            x = x*(1 + tScale) + tShift # Restricted dependence on time
+            tScale, tShift = tScaleNShift.chunk(2, dim=1)
+            x = x*(1 + tScale) + tShift
             
         x = self.actFn(x)
         x = self.block2(x)
@@ -76,61 +81,67 @@ class ResidualBlockWithTimeScaling(nn.Module):
         x = self.actFn(x + xInp)
         return x
 
-class ResidualBlockSequences(nn.Module):
-    def __init__(self, nnf, inpDim, outDim, nHidDims, nHidLyrs, timeDim, actFnName,
-                 actLyrName, wtNormInd) -> None:
-        super().__init__()
-        
-        inpLayers = [nnf.LinearLayer(inpDim, nHidDims, wtNormInd), nnf.GetActLayer(actLyrName)(nHidDims),
-                     nnf.GetActFn(actFnName)()]
-        self.inputBlock = nn.Sequential(*inpLayers)
-        
-        resLayers = [ResidualBlockWithTimeScaling(nnf, nHidDims, nHidDims, actFnName, nHidDims, timeDim, actLyrName, wtNormInd) for _ in range(nHidLyrs)]
-        self.resBlock = nn.Sequential(*resLayers)
-        
-        self.outLayers = nnf.LinearLayer(nHidDims, outDim, wtNormInd)
-        
-    def forward(self, x, t):
-        x = self.inputBlock(x)
-        x = self.resBlock(x, t)
-        x = self.outLayers(x)
-        return x
-
 class NNModel(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
         self.nnf = CommonNNFunctions()
-        self.tEmbed = nn.Linear(1, config.nHiddenDims)
-        self.yEmbed = nn.Linear(config.inputDim, config.nHiddenDims)
-        self.tyEmbed = ResidualBlockSequences(nnf = self.nnf,
-                                              inpDim = 2*config.nHiddenDims,
-                                              outDim = config.nHiddenDims,
-                                              nHidDims = config.nHiddenDims,
-                                              nHidLyrs = 2,
-                                              timeDim = config.nHiddenDims,
-                                              actFnName = config.actFnName,
-                                              actLyrName = config.actLayerName,
-                                              wtNormInd = config.weightNormIndicator)
+        self.nTyHiddenLayers = 2
+        self.nNpHiddenLayers = config.nHiddenLayers
         
-        self.denoise = ResidualBlockSequences(nnf = self.nnf,
-                                              inpDim = config.inputDim,
-                                              outDim = config.inputDim,
-                                              nHidDims = config.nHiddenDims,
-                                              nHidLyrs = config.nHiddenLayers,
-                                              timeDim = config.nHiddenDims,
-                                              actFnName = config.actFnName,
-                                              actLyrName = config.actLayerName,
-                                              wtNormInd = config.weightNormIndicator)
+        self.tEmbed = nn.Linear(1, config.nHiddenDims)
+        self.yEmbed = nn.Linear(config.outputDim, config.nHiddenDims)
+        
+        # ty Embedding Residual Block
+        tyInpLayers = [self.nnf.LinearLayer(2*config.nHiddenDims, config.nHiddenDims,
+                                          config.weightNormIndicator),
+                       self.nnf.GetActLayer(config.actLayerName)(config.nHiddenDims),
+                       self.nnf.GetActFn(config.actFnName)()]
+        self.tyInputBlock = nn.Sequential(*tyInpLayers)
+        self.tyResidualBlocks = [ResidualBlockWithTimeScaling(nnf = self.nnf, inpDim = config.nHiddenDims,
+                                                              nHidDims = config.nHiddenDims, actFnName = config.actFnName,
+                                                              outDim = config.nHiddenDims,
+                                                              timeDim = config.nHiddenDims,
+                                                              actLyrName = config.actLayerName,
+                                                              wtNormInd = config.weightNormIndicator) 
+                                 for _ in range(self.nTyHiddenLayers)]
+        self.tyOutLayers = self.nnf.LinearLayer(config.nHiddenDims,
+                                                config.nHiddenDims,
+                                                config.weightNormIndicator)
+        
+        
+        # self.noisePrediction 
+        npInpLayers = [self.nnf.LinearLayer(config.nHiddenDims, config.nHiddenDims, 
+                                                  config.weightNormIndicator),
+                            self.nnf.GetActLayer(config.actLayerName)(config.nHiddenDims),
+                            self.nnf.GetActFn(config.actFnName)()]
+        self.npInputBlock = nn.Sequential(*npInpLayers)
+        self.npResidualBlocks = [ResidualBlockWithTimeScaling(nnf = self.nnf, inpDim = config.nHiddenDims,
+                                                              nHidDims = config.nHiddenDims, actFnName = config.actFnName,
+                                                              outDim = config.nHiddenDims,
+                                                              timeDim = config.nHiddenDims,
+                                                              actLyrName = config.actLayerName,
+                                                              wtNormInd = config.weightNormIndicator) 
+                                 for _ in range(config.nHiddenLayers)]
+        self.npOutLayers = self.nnf.LinearLayer(config.nHiddenDims,
+                                                config.nHiddenDims,
+                                                config.weightNormIndicator)
     
     def forward(self, xInput, yInput, tSteps, yBlock):
-        t = self.tEmbed(tSteps)
-        y = self.yEmbed(yInput)
-        y = y*(1 - yBlock)
+        t = self.tEmbed(tSteps) # (B, hidDim)
+        y = self.yEmbed(yInput) # (B, hidDim)
+        y = y*(1 - yBlock) ## Classifier free guidance - classification embedding set to zero
         
-        ty = torch.cat((t, y), dim=-1) # probably I am overcomplicating this
-        ty = self.tyEmbed(ty, t)
-        x = self.denoise(xInput, ty)
-        return x      
+        ty = torch.cat((t, y), dim=-1) # (B, 2*hidDim)
+        ty = self.tyInputBlock(ty) # (B, hidDim)
+        for iResblock in range(self.nTyHiddenLayers):
+            ty = self.tyResidualBlocks[iResblock](ty, t) # (B, hidDim)
+        ty = self.tyOutLayers(ty) # (B, hidDim)
+        
+        x = self.npInputBlock(xInput) # (B, hidDim)
+        for iResblock in range(self.nNpHiddenLayers):
+            x = self.npResidualBlocks[iResblock](x, ty) # (B, hidDim)
+        x = self.npOutLayers(x) # (B, hidDim)
+        return x
 
 class DDPM(nn.Module):
     def __init__(self, config):
@@ -138,20 +149,24 @@ class DDPM(nn.Module):
         # self.config = config
         self.nT = config.nT
         self.dropProb = config.dropProb
-        self.diffModel = DiffusionModel()
-        self.noiseSched = self.diffModel.GetLinearNoiseSchedule(*config.beta, config.nT)
+        self.noiseSched = DiffusionModel().GetLinearNoiseSchedule(*config.beta, config.nT)
         self.nnModel = NNModel(config)
         
     def forward(self, x, y):
         batchSize = x.shape[0]
-        sampledTimes = torch.randint(1, self.nT + 1, batchSize) # (B,)
+        sampledTimes = torch.randint(1, self.nT + 1, (batchSize,)) # (B,)
         stdNormalNoise = torch.randn_like(x) # (B, xDim)
         
+        # Forward Diffusion Model: x_t
         xAtSampledTimes = (self.noiseSched["sqrtAlpha"][sampledTimes]*x +
                            self.noiseSched["sqrtOneMinusAlphaBar"][sampledTimes]*stdNormalNoise)
-        yBlock = torch.bernoulli(torch.zeros(batchSize) + self.dropProb) # What for?
+        
+        # For classifier free guidance
+        yBlock = torch.bernoulli(torch.zeros(batchSize) + self.dropProb)[:, None]
+        
+        tSteps = (sampledTimes/self.nT)[:, None]
         loss = (stdNormalNoise - self.nnModel(xAtSampledTimes, y,
-                                              sampledTimes/self.nT, yBlock)).square().mean()
+                                              tSteps, yBlock)).square().mean()
         return loss
     
     @torch.no_grad()
@@ -213,7 +228,6 @@ class BraninDDPM():
         print("Validating Braning model from", config.checkPoint)
         # TBD
         
-
 if __name__ == "__main__":
     import IPython
     IPython.embed()

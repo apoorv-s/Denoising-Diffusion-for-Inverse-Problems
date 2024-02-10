@@ -1,6 +1,6 @@
 import argparse
 from Configs.Configs import BraninConfig
-import Core.Core as cf
+import Core.Utils as cf
 
 if __name__ == "__main__":
     taskName = "Branin"
