@@ -75,10 +75,10 @@ class ResidualBlockWithTimeScaling(nn.Module):
             tScale, tShift = tScaleNShift.chunk(2, dim=1)
             x = x*(1 + tScale) + tShift
             
-        x = self.actFn(x)
+        x = self.actFn1(x)
         x = self.block2(x)
         x = self.actLyr2(x)
-        x = self.actFn(x + xInp)
+        x = self.actFn2(x + xInp)
         return x
 
 class NNModel(nn.Module):
@@ -110,7 +110,7 @@ class NNModel(nn.Module):
         
         
         # self.noisePrediction 
-        npInpLayers = [self.nnf.LinearLayer(config.nHiddenDims, config.nHiddenDims, 
+        npInpLayers = [self.nnf.LinearLayer(config.inputDim, config.nHiddenDims, 
                                                   config.weightNormIndicator),
                             self.nnf.GetActLayer(config.actLayerName)(config.nHiddenDims),
                             self.nnf.GetActFn(config.actFnName)()]
@@ -123,7 +123,7 @@ class NNModel(nn.Module):
                                                               wtNormInd = config.weightNormIndicator) 
                                  for _ in range(config.nHiddenLayers)]
         self.npOutLayers = self.nnf.LinearLayer(config.nHiddenDims,
-                                                config.nHiddenDims,
+                                                config.inputDim,
                                                 config.weightNormIndicator)
     
     def forward(self, xInput, yInput, tSteps, yBlock):
@@ -140,7 +140,7 @@ class NNModel(nn.Module):
         x = self.npInputBlock(xInput) # (B, hidDim)
         for iResblock in range(self.nNpHiddenLayers):
             x = self.npResidualBlocks[iResblock](x, ty) # (B, hidDim)
-        x = self.npOutLayers(x) # (B, hidDim)
+        x = self.npOutLayers(x) # (B, inputDim)
         return x
 
 class DDPM(nn.Module):
@@ -158,15 +158,14 @@ class DDPM(nn.Module):
         stdNormalNoise = torch.randn_like(x) # (B, xDim)
         
         # Forward Diffusion Model: x_t
-        xAtSampledTimes = (self.noiseSched["sqrtAlpha"][sampledTimes]*x +
-                           self.noiseSched["sqrtOneMinusAlphaBar"][sampledTimes]*stdNormalNoise)
+        xAtSampledTimes = (self.noiseSched["sqrtAlpha"][sampledTimes][:, None]*x +
+                           self.noiseSched["sqrtOneMinusAlphaBar"][sampledTimes][:, None]*stdNormalNoise)
         
         # For classifier free guidance
         yBlock = torch.bernoulli(torch.zeros(batchSize) + self.dropProb)[:, None]
         
         tSteps = (sampledTimes/self.nT)[:, None]
-        loss = (stdNormalNoise - self.nnModel(xAtSampledTimes, y,
-                                              tSteps, yBlock)).square().mean()
+        loss = (stdNormalNoise - self.nnModel(xAtSampledTimes, y, tSteps, yBlock)).square().mean()
         return loss
     
     @torch.no_grad()
