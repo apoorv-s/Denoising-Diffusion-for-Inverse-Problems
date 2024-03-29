@@ -1,9 +1,9 @@
 import argparse
 from Configs.Configs import BraninConfig
-import Core.Core as cf
+from Core.Branin import BraninDDPM
 
 if __name__ == "__main__":
-    taskName = "Branin"
+    task_name = "Branin"
     
     parser = argparse.ArgumentParser(description="DDPM parser")
     parser.add_argument("--validate", default=False, action="store_true")
@@ -11,10 +11,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     config = BraninConfig()
-    config.runNumber = args.runNumber
-    config.trainDir = config.saveDir + f"/run{config.runNumber}/train/"
+    config.run_number = args.run_number
     
-    cf.TrainBranin(config)
+    branin_obj=BraninDDPM(config)
+    branin_obj.train()
+    
+    print("Training Complete")
     
     
 

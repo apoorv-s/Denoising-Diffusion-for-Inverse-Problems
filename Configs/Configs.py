@@ -1,31 +1,31 @@
 class BraninConfig:
     # data
-    inputDim = 2
-    outputDim = 1
+    inp_dim = 2
+    out_dim = 1
     
-    saveDir = "./SavedResults/Branin"
+    save_dir = "./SavedResults/Branin"
     
     
-    weightNormIndicator = False
-    actLayerName = "batch"
-    actFnName = "relu"
+    wt_norm_ind = False
+    act_lyr = "batch"
+    act_fn = "relu"
     
-    batchSize = 64
-    numWorkers = 4
-    learningRate = 1e-3
-    weightDecay = 1e-3
+    batch_size = 64
+    n_workers = 4
+    lr = 1e-3
+    wt_decay = 1e-3
     
-    saveIntermediateModels = True
-    nEpochs = 200
-    nHiddenLayers = 4
-    nHiddenDims = 64
+    save_bw_ep = True
+    n_epochs = 200
+    n_resnets = 2
+    n_hid_dim = 128
     
-    conditioningWeights = [0, 0.5, 2]
+    conditioning_weights = [0, 0.5, 2]
     
-    dropProb = 0.1
-    nT = 500
+    drop_prob = 0.1
+    n_time = 500
     
     # Noise Schedule:
-    beta = (1e-4, 0.02)
+    beta_range = (1e-4, 0.02)
     
     
