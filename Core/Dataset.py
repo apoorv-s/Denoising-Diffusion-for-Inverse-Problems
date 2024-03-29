@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 
 
 class BraninDataset(Dataset):
-    def __init__(self, filename):
+    def __init__(self, config):
         super().__init__()
         self.input_dim=config.inp_dim
         self.output_dim=config.out_dim
