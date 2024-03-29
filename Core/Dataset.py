@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 
 
 class BraninDataset(Dataset):
-    def __init__(self, config):
+    def __init__(self, filename):
         super().__init__()
         self.input_dim=config.inp_dim
         self.output_dim=config.out_dim
@@ -16,7 +16,7 @@ class BraninDataset(Dataset):
         self.s = 10
         self.t = 1/(8*np.pi)
         
-        self.range = [[-5, 10], [0, 15]]
+        self.range = torch.tensor([[-5, 10], [0, 15]])
         
     def func(self, x):
         y = (self.a * (x[..., 1] - self.b*(x[..., 0]**2) + self.c*x[..., 0] - self.r)**2 + self.s*(1 - self.t)*torch.cos(x[..., 0]) + self.s)
