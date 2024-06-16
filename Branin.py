@@ -7,7 +7,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="DDPM parser")
     parser.add_argument("--validate", default=False, action="store_true")
-    parser.add_argument("--runNumber", required=True)
+    parser.add_argument("--run_number", required=True)
     args = parser.parse_args()
     
     config = BraninConfig()
