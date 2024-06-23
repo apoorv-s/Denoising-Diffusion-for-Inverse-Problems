@@ -7,7 +7,7 @@ from Core.Dataset import BraninDataset
 from tqdm import trange
 import os
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def diffusion_noise_schedule(n_steps, beta_range):
     beta=torch.linspace(beta_range[0], beta_range[1], n_steps)
@@ -79,7 +79,7 @@ class DiffusionModel(nn.Module):
         t_embed=self.t_embed_nn(t)
         if mode=="train":
             y_embed=self.y_embed_nn(y)
-            y_embed=y_embed*torch.bernoulli(torch.ones(y_embed.shape[0], 1)-self.drop_prob)
+            y_embed=y_embed*(torch.bernoulli(torch.ones(y_embed.shape[0], 1)-self.drop_prob).to(device))
         elif mode=="eval":
             if y is None:
                 y_embed=torch.zeros((noisy_x.shape[0], self.n_hid_dim))
@@ -110,45 +110,55 @@ class BraninDDPM():
         
     def train(self, config, run_number):
         description = self.generate_discription(config, run_number)
+        print("****** Training Initiated ******")
+        print(description)
         
         train_dir=config.save_dir+"/run"+str(run_number)+"/train"
         os.makedirs(train_dir, exist_ok=False)
         
         model = DiffusionModel(config).to(device)
         dataset=BraninDataset(config)
-        dataloader=DataLoader(dataset, batch_size=512)
+        dataloader=DataLoader(dataset, batch_size=config.batch_size)
         optimizer=torch.optim.Adam(model.parameters(), lr=config.lr)
-        loss_function = nn.MSELoss(reduction='sum')
+        loss_function = nn.MSELoss()
         
         [alpha, beta, sqrt_alpha_bar,
          sqrt_om_alpha_bar]=diffusion_noise_schedule(config.n_time, config.beta_range)
         
         writer=SummaryWriter(train_dir+'/tboard')
+        writer.add_text('description', description)
+        
         counter=0
         
         mode="train"
         model.train()
-        for ep in trange(config.n_epochs):
+        pbar = trange(config.n_epochs)
+        for ep in pbar:
             running_loss=0.0
+            epoch_loss = 0.0
             for ind, batch_data in enumerate(dataloader):
                 optimizer.zero_grad()
-                data_x = batch_data['x']    
+                data_x = batch_data['x']
                 batch_size=data_x.shape[0]
                 inp_noise=torch.randn_like(data_x)
                 inp_t_ind=torch.randint(0, config.n_time, (batch_size, 1))
                 inp_x = (data_x*sqrt_alpha_bar[inp_t_ind] + inp_noise*sqrt_om_alpha_bar[inp_t_ind]).to(device)
                 inp_y = batch_data['y'].to(device)
                 inp_t = (inp_t_ind/config.n_time).to(device)
-                pred_noise = model(inp_x, inp_y, inp_t, mode)
-                loss = loss_function(pred_noise, inp_noise)
+                pred_noise = model(inp_x, inp_y, inp_t, mode).to(device)
+                loss = loss_function(pred_noise, inp_noise.to(device)).to(device)
                 loss.backward()
                 optimizer.step()
                 running_loss=running_loss+loss.item()
-                if ind%100==99:
-                    writer.add_scalar('running_train_loss', running_loss/100, counter)
+                if (ind + 1)%10==0:
+                    writer.add_scalar('running_train_loss', running_loss, counter)
                     counter=counter+1
-                    print('[epoch=%d--batch_id=%d] loss=%.3f'%(ep, ind, running_loss/100))
+                    epoch_loss += running_loss
                     running_loss=0.0
+                    writer.flush()
+                
+            pbar.set_description(f"epoch stats: epoch = {ep}, epoch_loss = {epoch_loss:.4f}")
+            writer.add_scalar('epoch_loss', epoch_loss, global_step=ep)
                     
             if (ep + 1)%config.n_epochs_bw_saves==0:
                 torch.save({"state_dict":model.state_dict(),

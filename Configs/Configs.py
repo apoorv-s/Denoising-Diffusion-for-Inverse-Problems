@@ -10,14 +10,14 @@ class BraninConfig():
         self.act_lyr = "batch"
         self.act_fn = "relu"
         
-        self.batch_size = 64
+        self.batch_size = 1024
         self.n_workers = 4
         self.lr = 1e-4
         self.wt_decay = 1e-3
         
         self.save_bw_ep = True
         self.n_epochs = 500
-        self.n_resnets = 2
+        self.n_resnets = 3
         self.n_hid_dim = 128
         
         self.drop_prob = 0.1
