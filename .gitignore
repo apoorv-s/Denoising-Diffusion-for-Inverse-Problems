@@ -154,3 +154,5 @@ cython_debug/
 SavedResults/
 *.err
 *.out
+*.tfevents*
+*.pt

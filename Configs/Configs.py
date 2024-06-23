@@ -1,31 +1,31 @@
-class BraninConfig:
-    # data
-    inp_dim = 2
-    out_dim = 1
-    
-    save_dir = "./SavedResults/Branin"
-    
-    
-    wt_norm_ind = False
-    act_lyr = "batch"
-    act_fn = "relu"
-    
-    batch_size = 64
-    n_workers = 4
-    lr = 1e-3
-    wt_decay = 1e-3
-    
-    save_bw_ep = True
-    n_epochs = 200
-    n_resnets = 2
-    n_hid_dim = 128
-    
-    conditioning_weights = [0, 0.5, 2]
-    
-    drop_prob = 0.1
-    n_time = 500
-    
-    # Noise Schedule:
-    beta_range = (1e-4, 0.02)
+class BraninConfig():
+    def __init__(self) -> None:
+        # data
+        self.inp_dim = 2
+        self.out_dim = 1
+        
+        self.save_dir = "./Models/Branin"
+        
+        self.wt_norm_ind = False
+        self.act_lyr = "batch"
+        self.act_fn = "relu"
+        
+        self.batch_size = 64
+        self.n_workers = 4
+        self.lr = 1e-4
+        self.wt_decay = 1e-3
+        
+        self.save_bw_ep = True
+        self.n_epochs = 500
+        self.n_resnets = 2
+        self.n_hid_dim = 128
+        
+        self.drop_prob = 0.1
+        self.n_time = 500
+        
+        # Noise Schedule:
+        self.beta_range = (1e-4, 0.02)
+        
+        self.n_epochs_bw_saves = 50
     
     

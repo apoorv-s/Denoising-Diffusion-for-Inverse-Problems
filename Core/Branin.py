@@ -14,7 +14,7 @@ def diffusion_noise_schedule(n_steps, beta_range):
     alpha=1-beta
     alpha_bar=torch.cumprod(alpha, dim=0)
     om_alpha_bar=1-alpha_bar
-    return [alpha_bar.sqrt(), om_alpha_bar.sqrt()]
+    return [alpha, beta, alpha_bar.sqrt(), om_alpha_bar.sqrt()]
 
 def get_act_fn(act_fn):
     return {'relu':nn.ReLU, 'tanh':nn.Tanh}[act_fn]
@@ -40,10 +40,11 @@ class ResNet(nn.Module):
         out=self.act2(temp_inp+inp)
         return out
 
-class NNModel(nn.Module):
+class DiffusionModel(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
         self.drop_prob=config.drop_prob
+        self.n_hid_dim = config.n_hid_dim
         self.t_embed_nn=nn.Sequential(*[nn.Linear(1, config.n_hid_dim),
                                        nn.BatchNorm1d(config.n_hid_dim),
                                        get_act_fn(config.act_fn)(),
@@ -65,7 +66,7 @@ class NNModel(nn.Module):
                                        get_act_fn(config.act_fn)(),
                                        nn.Linear(config.n_hid_dim, config.n_hid_dim)])
         
-        self.resnets=[]
+        self.resnets=nn.ModuleList()
         for _ in range(config.n_resnets):
             self.resnets.append(ResNet(config.n_hid_dim, config.n_hid_dim, config.act_fn))
             
@@ -81,11 +82,11 @@ class NNModel(nn.Module):
             y_embed=y_embed*torch.bernoulli(torch.ones(y_embed.shape[0], 1)-self.drop_prob)
         elif mode=="eval":
             if y is None:
-                y_embed=torch.zeros((y.shape[0], self.config.n_hid_dim))
+                y_embed=torch.zeros((noisy_x.shape[0], self.n_hid_dim))
             else:
                 y_embed=self.y_embed_nn(y)
         else:
-            raise ValueError("unknown mode")
+            raise ValueError("unknown mode: not train or eval")
         
         ty_embed=self.ty_embed_nn(torch.cat([t_embed, y_embed], dim=1))
         x_embed=self.x_embed_nn(noisy_x)
@@ -97,55 +98,49 @@ class NNModel(nn.Module):
         out=self.final_layer(xty_embed)
         return out        
 
-class DiffusionModel(nn.Module):
-    def __init__(self, config) -> None:
-        super().__init__()
-        self.config=config
-        self.nn_model=NNModel(config)
-        [self.sqrt_alpha_bar,
-         self.sqrt_om_alpha_bar]=diffusion_noise_schedule(self.config.n_time,
-                                                                   self.config.beta_range)
-        
-    def forward(self, inp, out, mode):
-        batch_size=inp.shape[0]
-        
-        inp_noise=torch.randn_like(inp)
-        t_indices=torch.randint(0, self.config.n_time, (batch_size, 1))
-        noisy_x = inp*self.sqrt_alpha_bar[t_indices] + inp_noise*self.sqrt_om_alpha_bar[t_indices]
-        
-        predicted_noise=self.nn_model(noisy_x, out, t_indices/self.config.n_time, mode)
-        return (inp_noise-predicted_noise).square().mean()
-        
-
 class BraninDDPM():
-    def __init__(self, config, model_path=None) -> None:
-        self.config=config
-        if model_path is None:
-            self.pretrained=False
-            self.model=DiffusionModel(config).to(device)
-            print("untrained model")
-        else:
-            self.pretrained=True
-            self.model=torch.load(model_path)
-            print("using trained model")
+    def __init__(self) -> None:
+        self.pretrained_model = None
+            
+    def generate_discription(self, config, run_number = None):
+        config_vars = vars(config)
+        config_str = f"Run number: {run_number}\nConfig:\n"
+        config_str += "\n".join(f"    {key} = {repr(value)}" for key, value in config_vars.items())
+        return config_str
         
-    def train(self):
-        dataset=BraninDataset(self.config)
-        dataloader=DataLoader(dataset, batch_size=64, shuffle=True)
-        optimizer=torch.optim.Adam(self.model.parameters(), lr=self.config.lr)
+    def train(self, config, run_number):
+        description = self.generate_discription(config, run_number)
         
-        train_dir=self.config.save_dir+"/run"+str(self.config.run_number)+"/train"
+        train_dir=config.save_dir+"/run"+str(run_number)+"/train"
         os.makedirs(train_dir, exist_ok=False)
+        
+        model = DiffusionModel(config).to(device)
+        dataset=BraninDataset(config)
+        dataloader=DataLoader(dataset, batch_size=512)
+        optimizer=torch.optim.Adam(model.parameters(), lr=config.lr)
+        loss_function = nn.MSELoss(reduction='sum')
+        
+        [alpha, beta, sqrt_alpha_bar,
+         sqrt_om_alpha_bar]=diffusion_noise_schedule(config.n_time, config.beta_range)
         
         writer=SummaryWriter(train_dir+'/tboard')
         counter=0
+        
         mode="train"
-        for ep in trange(self.config.n_epochs):
-            
+        model.train()
+        for ep in trange(config.n_epochs):
             running_loss=0.0
             for ind, batch_data in enumerate(dataloader):
                 optimizer.zero_grad()
-                loss=self.model(batch_data['x'].to(device), batch_data['y'].to(device), mode)
+                data_x = batch_data['x']    
+                batch_size=data_x.shape[0]
+                inp_noise=torch.randn_like(data_x)
+                inp_t_ind=torch.randint(0, config.n_time, (batch_size, 1))
+                inp_x = (data_x*sqrt_alpha_bar[inp_t_ind] + inp_noise*sqrt_om_alpha_bar[inp_t_ind]).to(device)
+                inp_y = batch_data['y'].to(device)
+                inp_t = (inp_t_ind/config.n_time).to(device)
+                pred_noise = model(inp_x, inp_y, inp_t, mode)
+                loss = loss_function(pred_noise, inp_noise)
                 loss.backward()
                 optimizer.step()
                 running_loss=running_loss+loss.item()
@@ -154,14 +149,45 @@ class BraninDDPM():
                     counter=counter+1
                     print('[epoch=%d--batch_id=%d] loss=%.3f'%(ep, ind, running_loss/100))
                     running_loss=0.0
-            
-            if ep%20==19:
-                torch.save(self.model, train_dir+"/int_model_"+str(ep)+".pt")
+                    
+            if (ep + 1)%config.n_epochs_bw_saves==0:
+                torch.save({"state_dict":model.state_dict(),
+                            "description":description, 
+                            "config":config}, train_dir + f"/int_model_{ep}.pt")
         
-        torch.save(self.model, train_dir+"/final_model_"+str(ep)+".pt")
+        torch.save({"state_dict":model.state_dict(),
+                    "description":description,
+                    "config":config}, train_dir + f"/final_model_{ep}.pt")
+        
+        print("Training complete")
     
-    def sample(self):
-        pass
+    def sample(self, target_y, n_test_points, cond_weight):
+        assert self.pretrained_model, "Load pretrained model"
+        mode = "eval"
+        self.pretrained_model.eval()
         
-    def validate(self, n_points, y_test):
-        pass
+        [alpha, beta, sqrt_alpha_bar,
+         sqrt_om_alpha_bar]=diffusion_noise_schedule(self.pretrained_config.n_time,
+                                                     self.pretrained_config.beta_range)
+        om_alpha = 1 - alpha
+        
+        x_mat = torch.zeros((self.pretrained_config.n_time, n_test_points, self.pretrained_config.inp_dim))
+        x_mat[-1, :, :] = torch.randn((n_test_points, self.pretrained_config.inp_dim))
+        y_inp = torch.ones((n_test_points, self.pretrained_config.out_dim))*target_y
+        
+        for it in range(self.pretrained_config.n_time-1, -1, -1):
+            t_inp = torch.ones((n_test_points, 1))*it/self.pretrained_config.n_time
+            cond_pred_noise = self.pretrained_model(x_mat[it, :, :], y_inp, t_inp, mode)
+            uncond_pred_noise = self.pretrained_model(x_mat[it, :, :], None, t_inp, mode)
+            pred_noise = (1 + cond_weight)*cond_pred_noise + cond_weight*uncond_pred_noise
+            z = torch.randn_like(x_mat[it, :, :])            
+            x_mat[it - 1, :, :] = (x_mat[it, :, :] - (om_alpha[it]*pred_noise/sqrt_om_alpha_bar[it]))/(alpha[it].sqrt()) + beta[it]*z
+            
+        return x_mat
+        
+    def load_pretrained_model(self, model_path):
+        saved_obj = torch.load(model_path, map_location=device)
+        self.pretrained_description = saved_obj["description"]
+        self.pretrained_config = saved_obj["config"]
+        self.pretrained_model = DiffusionModel(saved_obj["config"])
+        self.pretrained_model.eval()
