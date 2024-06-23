@@ -37,6 +37,11 @@ class BraninDataset(Dataset):
         x1_grid,x2_grid=torch.meshgrid(x1,x2,indexing='ij')
         x=torch.stack([x1_grid.flatten(), x2_grid.flatten()]).T
         return {'x':x, 'y':self.func(x)}
+
+class PoseModelDataset(Dataset):
+    def __init__(self) -> None:
+        super().__init__()
+    
         
 if __name__ == "__main__":
     import IPython

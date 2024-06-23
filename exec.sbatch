@@ -1,13 +1,13 @@
 #!/bin/bash -l
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -J BranInv
+#SBATCH -J BranInv2
 #SBATCH -t 240:00:00
-#SBATCH -o BranInv_gpu.out
-#SBATCH -e BranInv_gpu.err
+#SBATCH -o BranInv_gpu2.out
+#SBATCH -e BranInv_gpu2.err
 #SBATCH --partition=gpu-ampere
 
 
 conda activate diff
 echo $CONDA_PREFIX
-python Branin.py --run_number 2 --train
+python Train.py --run_number 4 --model_name 'branin'
