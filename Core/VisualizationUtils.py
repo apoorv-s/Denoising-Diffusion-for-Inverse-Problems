@@ -1,0 +1,981 @@
+"""A pyrender-based helper for mesh or point cloud rendering.
+Inspired from: https://github.com/davrempe/humor/blob/main/humor/viz/mesh_viewer.py
+"""
+
+import time
+import numpy as np
+import trimesh
+import pyrender
+import sys
+import cv2
+from pyrender.constants import RenderFlags
+import os
+import trimesh
+import warnings
+
+import smplx
+from smplx.lbs import vertices2joints
+from smplx.utils import SMPLOutput
+
+from typing import Optional
+import torch
+import pickle
+
+os.environ["PYOPENGL_PLATFORM"] = "egl"
+COMPRESS_PARAMS = [cv2.IMWRITE_PNG_COMPRESSION, 9]
+
+colors = {
+    "pink": [0.7, 0.7, 0.9],
+    "purple": [0.9, 0.7, 0.7],
+    "cyan": [0.7, 0.75, 0.5],
+    "red": [1.0, 0.0, 0.0],
+    "green": [0.0, 1.0, 0.0],
+    "yellow": [1.0, 1.0, 0],
+    "brown": [0.5, 0.7, 0.7],
+    "blue": [0.0, 0.0, 1.0],
+    "offwhite": [0.8, 0.9, 0.9],
+    "white": [1.0, 1.0, 1.0],
+    "orange": [0.5, 0.65, 0.9],
+    "grey": [0.7, 0.7, 0.7],
+    "black": [0.0, 0.0, 0.0],
+    "white": [1.0, 1.0, 1.0],
+    "yellowg": [0.83, 1, 0],
+}
+
+def makeLookAt(position, target, up):
+    forward = np.subtract(target, position)
+    forward = np.divide(forward, np.linalg.norm(forward))
+
+    right = np.cross(forward, up)
+
+    # if forward and up vectors are parallel, right vector is zero;
+    #   fix by perturbing up vector a bit
+    if np.linalg.norm(right) < 0.001:
+        epsilon = np.array([0.001, 0, 0])
+        right = np.cross(forward, up + epsilon)
+
+    right = np.divide(right, np.linalg.norm(right))
+
+    up = np.cross(right, forward)
+    up = np.divide(up, np.linalg.norm(up))
+
+    return np.array(
+        [
+            [right[0], up[0], -forward[0], position[0]],
+            [right[1], up[1], -forward[1], position[1]],
+            [right[2], up[2], -forward[2], position[2]],
+            [0, 0, 0, 1],
+        ]
+    )
+
+def pause_play_callback(pyrender_viewer, mesh_viewer):
+    mesh_viewer.is_paused = not mesh_viewer.is_paused
+
+def step_callback(pyrender_viewer, mesh_viewer, step_size):
+    mesh_viewer.animation_frame_idx = (
+        mesh_viewer.animation_frame_idx + step_size
+    ) % mesh_viewer.animation_len
+
+class MeshViewer(object):
+    def __init__(
+        self,
+        width=512,
+        height=512,
+        use_offscreen=True,
+        camera_intrinsics=None,
+        img_extn="png",
+        cam_pos=[2.0, 2.0, 2.0],
+        cam_lookat=[0.0, 0.0, 0.0],
+        cam_up=[0.0, 1.0, 0.0],
+        add_floor=False,
+        add_axis=False,
+    ):
+        super().__init__()
+        self.use_offscreen = use_offscreen
+        # render settings for offscreen
+        self.render_wireframe = False
+        self.render_RGBA = False
+        self.img_extn = img_extn
+
+        # mesh sequences to animate
+        self.animated_seqs = []  # the actual sequence of pyrender meshes
+        self.animated_seqs_type = []
+        self.animated_nodes = []  # the nodes corresponding to each sequence
+        self.light_nodes = []
+        # they must all be the same length (set based on first given sequence)
+        self.animation_len = -1
+        # current index in the animation sequence
+        self.animation_frame_idx = 0
+
+        # background image sequence
+        self.img_seq = None
+        self.cur_bg_img = None
+        self.camera_seq = None
+
+        self.single_frame = False
+
+        self.scene = pyrender.Scene(
+            bg_color=colors["white"], ambient_light=(0.3, 0.3, 0.3)
+        )
+
+        self.default_cam_pose = makeLookAt(cam_pos, cam_lookat, cam_up)
+
+        if camera_intrinsics is None:
+            pc = pyrender.PerspectiveCamera(
+                yfov=np.pi / 4.0, aspectRatio=float(width) / height
+            )
+            camera_pose = self.default_cam_pose.copy()
+            self.camera_node = self.scene.add(pc, pose=camera_pose, name="pc-camera")
+
+            light = pyrender.DirectionalLight(color=np.ones(3), intensity=1.0)
+            self.scene.add(light, pose=self.default_cam_pose)
+        else:
+            fx, fy, cx, cy = camera_intrinsics
+            camera_pose = np.eye(4)
+            camera_pose = np.array([1.0, -1.0, -1.0, 1.0]).reshape(-1, 1) * camera_pose
+            camera = pyrender.camera.IntrinsicsCamera(fx=fx, fy=fy, cx=cx, cy=cy)
+            self.camera_node = self.scene.add(
+                camera, pose=camera_pose, name="pc-camera"
+            )
+
+            light = pyrender.DirectionalLight(color=np.ones(3), intensity=1.0)
+            self.scene.add(light, pose=camera_pose)
+
+            self.set_background_color([1.0, 1.0, 1.0, 0.0])
+
+        # key callbacks
+        self.is_paused = False
+        registered_keys = dict()
+        registered_keys["p"] = (pause_play_callback, [self])
+        registered_keys["."] = (step_callback, [self, 1])
+        registered_keys[","] = (step_callback, [self, -1])
+
+        if self.use_offscreen:
+            # self.viewport_size = (width, height)
+            self.viewer = pyrender.OffscreenRenderer(width, height)
+            self.use_raymond_lighting(3.5)
+        else:
+            self.viewer = pyrender.Viewer(
+                self.scene,
+                use_raymond_lighting=(not camera_intrinsics),
+                viewport_size=(width, height),
+                cull_faces=False,
+                run_in_thread=True,
+                registered_keys=registered_keys,
+                viewer_flags={
+                    "rotate_axis": np.array([0.0, 1.0, 0.0]),
+                    "show_world_axis": True,
+                },
+            )
+
+        if add_floor:
+            floor = trimesh.creation.box(10 * (1.001 - np.array(cam_up)))
+            floor = trimesh.Trimesh(
+                vertices=floor.vertices,
+                faces=floor.faces,
+                vertex_colors=floor.visual.vertex_colors,
+            )
+            self.add_static_meshes([floor])
+
+        if add_axis:
+            axs = trimesh.creation.axis()
+            axs = trimesh.Trimesh(
+                vertices=axs.vertices * 1,
+                faces=axs.faces,
+                vertex_colors=axs.visual.vertex_colors,
+            )
+            self.add_static_meshes([axs])
+
+    def set_background_color(self, color=colors["white"]):
+        self.scene.bg_color = color
+
+    def update_camera_pose(self, camera_pose):
+        self.scene.set_pose(self.camera_node, pose=camera_pose)
+
+    def update_camera(self, cam):
+        self.scene.remove_node(self.camera_node)
+        yfov = cam["yfov"]
+        width = cam["width"]
+        height = cam["height"]
+        pc = pyrender.PerspectiveCamera(yfov=yfov, aspectRatio=float(width) / height)
+        camera_pose = cam["T"]
+        self.camera_node = self.scene.add(pc, pose=camera_pose, name="pc-camera")
+
+    def close_viewer(self):
+        if self.viewer.is_active:
+            self.viewer.close_external()
+
+    def set_render_settings(self, wireframe=None, RGBA=None, single_frame=None):
+        if wireframe is not None and wireframe == True:
+            self.render_wireframe = True
+        if RGBA is not None and RGBA == True:
+            self.render_RGBA = True
+        if single_frame is not None:
+            self.single_frame = single_frame
+
+    def acquire_render_lock(self):
+        if not self.use_offscreen:
+            self.viewer.render_lock.acquire()
+
+    def release_render_lock(self):
+        if not self.use_offscreen:
+            self.viewer.render_lock.release()
+
+    def _add_raymond_light(self):
+        from pyrender.light import DirectionalLight
+        from pyrender.node import Node
+
+        thetas = np.pi * np.array([1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0])
+        phis = np.pi * np.array([0.0, 2.0 / 3.0, 4.0 / 3.0])
+
+        nodes = []
+
+        for phi, theta in zip(phis, thetas):
+            xp = np.sin(theta) * np.cos(phi)
+            yp = np.sin(theta) * np.sin(phi)
+            zp = np.cos(theta)
+
+            z = np.array([xp, yp, zp])
+            z = z / np.linalg.norm(z)
+            x = np.array([-z[1], z[0], 0.0])
+            if np.linalg.norm(x) == 0:
+                x = np.array([1.0, 0.0, 0.0])
+            x = x / np.linalg.norm(x)
+            y = np.cross(z, x)
+
+            matrix = np.eye(4)
+            matrix[:3, :3] = np.c_[x, y, z]
+            nodes.append(
+                Node(
+                    light=DirectionalLight(color=np.ones(3), intensity=1.0),
+                    matrix=matrix,
+                )
+            )
+        return nodes
+
+    def use_raymond_lighting(self, intensity=1.0):
+        if not self.use_offscreen:
+            sys.stderr.write("Interactive viewer already uses raymond lighting!\n")
+            return
+        for n in self._add_raymond_light():
+            n.light.intensity = intensity / 3.0
+            if not self.scene.has_node(n):
+                self.scene.add_node(n)  # , parent_node=pc)
+
+            self.light_nodes.append(n)
+
+    # ----------------------------------------------
+    # Static meshes
+    # ----------------------------------------------
+    def set_meshes(self, meshes, group_name="static", remove_old=False):
+        """Add a list of static meshes to the scene."""
+        if remove_old:
+            for node in self.scene.get_nodes():
+                if node.name is not None and "%s-mesh" % group_name in node.name:
+                    self.scene.remove_node(node)
+
+        for mid, mesh in enumerate(meshes):
+            if isinstance(mesh, trimesh.Trimesh):
+                mesh = pyrender.Mesh.from_trimesh(mesh.copy())
+            self.acquire_render_lock()
+            self.scene.add(mesh, "%s-mesh-%2d" % (group_name, mid))
+            self.release_render_lock()
+
+    def set_static_meshes(self, meshes):
+        self.set_meshes(meshes, group_name="static", remove_old=True)
+
+    def add_static_meshes(self, meshes):
+        self.set_meshes(meshes, group_name="staticadd", remove_old=False)
+
+    # ----------------------------------------------
+    # Animation assets
+    # ----------------------------------------------
+    def check_animation_len(self, cur_seq_len):
+        if self.animation_len != -1:
+            if cur_seq_len != self.animation_len:
+                print(
+                    "Unexpected imgage sequence length, all sequences must be the same length!"
+                )
+                return False
+        else:
+            if cur_seq_len > 0:
+                self.animation_len = cur_seq_len
+                return True
+            else:
+                print("Warning: imge sequence is length 0!")
+                return False
+        return True
+
+    def set_img_seq(self, img_seq):
+        """np array of BG images to be rendered in background."""
+        if not self.use_offscreen:
+            print("Cannot render background image if not rendering offscreen")
+            return
+        if not self.check_animation_len(len(img_seq)):
+            return
+        self.img_seq = img_seq
+        # must have alpha to render background
+        self.set_render_settings(RGBA=True)
+
+    def add_pyrender_mesh_seq(self, pyrender_mesh_seq, seq_type="default"):
+        if not self.check_animation_len(len(pyrender_mesh_seq)):
+            return
+        # add to the list of sequences to render
+        seq_id = len(self.animated_seqs)
+        self.animated_seqs.append(pyrender_mesh_seq)
+        self.animated_seqs_type.append(seq_type)
+        # create the corresponding node in the scene
+        self.acquire_render_lock()
+        anim_node = self.scene.add(pyrender_mesh_seq[0], "anim-mesh-%2d" % (seq_id))
+        self.animated_nodes.append(anim_node)
+        self.release_render_lock()
+
+    def add_mesh_seq(self, mesh_seq):
+        """Add a sequence of trimesh.trimesh objects for every frame to be rendered."""
+        if not self.check_animation_len(len(mesh_seq)):
+            return
+        # print('Adding mesh sequence with %d frames...' % (len(mesh_seq)))
+
+        pyrender_mesh_seq = []
+        # for mid, mesh in tqdm(enumerate(mesh_seq), desc='Caching meshes'):
+        for mid, mesh in enumerate(mesh_seq):
+            if isinstance(mesh, trimesh.Trimesh):
+                mesh = pyrender.Mesh.from_trimesh(mesh.copy())
+                pyrender_mesh_seq.append(mesh)
+            else:
+                print("Meshes must be from trimesh!")
+                return
+        self.add_pyrender_mesh_seq(pyrender_mesh_seq, seq_type="mesh")
+
+    def add_point_seq(self, point_seq, color=[1.0, 0.0, 0.0], radius=0.02):
+        """Add a sequence of pointclouds to be rendered as spheres."""
+
+        if not self.check_animation_len(len(point_seq)):
+            return
+        sm = trimesh.creation.uv_sphere(radius=radius, count=[4, 4])
+        sm.visual.vertex_colors = color
+        pyrender_point_seq = []
+        # for pid, points in tqdm(enumerate(point_seq), desc='Caching point meshes'):
+        for pid, points in enumerate(point_seq):
+            tfs = np.tile(np.eye(4), (points.shape[0], 1, 1))
+            tfs[:, :3, 3] = points
+            pyrender_point_seq.append(pyrender.Mesh.from_trimesh(sm.copy(), poses=tfs))
+        self.add_pyrender_mesh_seq(pyrender_point_seq, seq_type="point")
+
+    def add_camera_seq(self, camera_seq):
+        if not self.check_animation_len(len(camera_seq)):
+            return
+        self.camera_seq = camera_seq
+
+    def add_line_seq(self, line_seq, color=[0.0, 0.0, 0.0]):
+        """Add a sequence of lines to be rendered."""
+        if not self.check_animation_len(len(line_seq)):
+            return
+        pyrender_line_seq = []
+        # for lid, lines in tqdm(enumerate(line_seq), desc='Caching lines'):
+        for lid, lines in enumerate(line_seq):
+            pyrender_line_seq.append(
+                pyrender.Mesh(
+                    [
+                        pyrender.Primitive(
+                            lines, mode=pyrender.constants.GLTF.LINES, color_0=color
+                        )
+                    ]
+                )
+            )
+        self.add_pyrender_mesh_seq(pyrender_line_seq, seq_type="line")
+
+    # ----------------------------------------------
+    # Animation and Rendering
+    # ----------------------------------------------
+
+    def render(self):
+        """Render into an array."""
+        # flags = RenderFlags.SHADOWS_DIRECTIONAL
+        flags = RenderFlags.NONE
+        flags |= RenderFlags.SKIP_CULL_FACES
+        if self.render_RGBA:
+            flags |= RenderFlags.RGBA
+        if self.render_wireframe:
+            flags |= RenderFlags.ALL_WIREFRAME
+        color_img, depth_img = self.viewer.render(self.scene, flags=flags)
+        output_img = color_img
+        if self.cur_bg_img is not None:
+            color_img = color_img.astype(np.float32) / 255.0
+            person_mask = None
+            if self.cur_mask is not None:
+                person_mask = self.cur_mask[:, :, np.newaxis]
+                color_img = color_img * (1.0 - person_mask)
+            valid_mask = (color_img[:, :, -1] > 0)[:, :, np.newaxis]
+            input_img = self.cur_bg_img
+            if color_img.shape[2] == 4:
+                output_img = (
+                    color_img[:, :, :-1] * color_img[:, :, 3:]
+                    + (1.0 - color_img[:, :, 3:]) * input_img
+                )
+            else:
+                output_img = (
+                    color_img[:, :, :-1] * valid_mask + (1 - valid_mask) * input_img
+                )
+            output_img = (output_img * 255.0).astype(np.uint8)
+
+        return output_img
+
+    def save_image(self, color_img, fname):
+        if not self.use_offscreen:
+            sys.stderr.write(
+                "Currently saving snapshots only works with off-screen renderer!\n"
+            )
+            return
+        if color_img.shape[-1] == 4:
+            img_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGBA2BGRA)
+        else:
+            img_bgr = cv2.cvtColor(color_img, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(fname, img_bgr, COMPRESS_PARAMS)
+
+    def update_frame(self):
+        """Update frame to show the current self.animation_frame_idx"""
+        for seq_idx in range(len(self.animated_seqs)):
+            cur_mesh = self.animated_seqs[seq_idx][self.animation_frame_idx]
+            # render the current frame of eqch sequence
+            self.acquire_render_lock()
+
+            # replace the old mesh
+            anim_node = list(self.scene.get_nodes(name="anim-mesh-%2d" % (seq_idx)))[0]
+            anim_node.mesh = cur_mesh
+            self.release_render_lock()
+
+        # update camera pose
+        if self.camera_seq is not None:
+            self.update_camera(self.camera_seq[self.animation_frame_idx])
+
+        # update background img
+        if self.img_seq is not None:
+            self.acquire_render_lock()
+            self.cur_bg_img = self.img_seq[self.animation_frame_idx]
+            self.release_render_lock()
+
+    def animate(self, fps=30, save_path=None):
+        """
+        Starts animating any given mesh sequences. This should be called last after adding
+        all desired components to the scene as it is a blocking operation and will run
+        until the user exits (or the full video is rendered if offline).
+        """
+        if not self.use_offscreen:
+            print("=================================")
+            print("VIEWER CONTROLS")
+            print("p - pause/play")
+            print('"," and "." - step back/forward one frame')
+            print("w - wireframe")
+            print("h - render shadows")
+            print("q - quit")
+            print("=================================")
+
+        frame_dur = 1.0 / float(fps)
+        seq_imgs = []
+
+        # set up init frame
+        self.update_frame()
+        animation_render_time = time.time()
+
+        while self.use_offscreen or self.viewer.is_active:
+            if not self.use_offscreen:
+                sleep_len = frame_dur - (time.time() - animation_render_time)
+                if sleep_len > 0:
+                    time.sleep(sleep_len)
+            else:
+                # render frame
+                img = self.render()
+                seq_imgs.append(img)
+
+                if save_path:
+                    if not os.path.exists(save_path):
+                        os.mkdir(save_path)
+                        print(f"Rendering frames to {save_path}!")
+
+                    cur_file_path = os.path.join(
+                        save_path,
+                        "frame_%08d.%s" % (self.animation_frame_idx, self.img_extn),
+                    )
+                    self.save_image(img, cur_file_path)
+
+                if self.animation_frame_idx + 1 >= self.animation_len:
+                    self.viewer.delete()
+                    break
+
+            animation_render_time = time.time()
+            if self.is_paused:
+                self.update_frame()  # just in case there's a single frame update
+                continue
+
+            self.animation_frame_idx = (
+                self.animation_frame_idx + 1
+            ) % self.animation_len
+            self.update_frame()
+
+            if self.single_frame:
+                break
+
+        self.animation_frame_idx = 0
+        return np.stack(seq_imgs)
+
+def dcn(a):
+    """Convert a torch tensor to numpy array."""
+    if isinstance(a, np.ndarray):
+        return a
+    return a.detach().cpu().numpy()
+
+def hstack_images(imgs, channel_first=True):
+    if imgs.ndim == 5:
+        return np.stack([hstack_images(im) for im in imgs], 0)
+    if not channel_first:
+        # imgs B x H x W x C
+        b, h, w, c = imgs.shape
+        imgs = np.transpose(imgs, [1, 0, 2, 3])  # H x B x W x C
+        imgs = np.reshape(imgs, [h, -1, c])
+    else:
+        # imgs B x C x H x W
+        b, c, h, w = imgs.shape
+        imgs = np.transpose(imgs, [1, 2, 0, 3])  # C x H x B x W
+        imgs = np.reshape(imgs, [c, h, -1])
+    return imgs
+
+def gridimg(array, nrows=3):
+    """Get a single grid image from a batch of images."""
+    # array: B x H x W x C
+    nindex, height, width, intensity = array.shape
+    ncols = nindex // nrows
+    assert nindex == nrows * ncols
+    # want result.shape = (height*nrows, width*ncols, intensity)
+    result = (
+        array.reshape(nrows, ncols, height, width, intensity)
+        .swapaxes(1, 2)
+        .reshape(height * nrows, width * ncols, intensity)
+    )
+    return result
+
+def save_video(imgs, vid_path, fps):
+    """Save a sequence of images as a video."""
+    height, width = imgs.shape[1:3]
+    # fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    # fourcc = cv2.VideoWriter_fourcc(*'H264')
+    # fourcc = -1
+    if vid_path.endswith(".mp4"):
+        fourcc = cv2.VideoWriter_fourcc(*"MP4V")
+    elif vid_path.endswith(".webm"):
+        fourcc = cv2.VideoWriter_fourcc(*"VP90")
+    video = cv2.VideoWriter(vid_path, fourcc, fps, (width, height))
+    for img in imgs:
+        video.write(img[:, :, [2, 1, 0]])
+    cv2.destroyAllWindows()
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="OpenCV: FFMPEG: tag 0x30395056/'VP90' is not supported with codec id 167 and format 'webm / WebM'",
+        )
+        video.release()
+
+def put_text_on_img(img, text):
+    font = cv2.FONT_HERSHEY_COMPLEX_SMALL
+    pos = (4, 4)
+    font_scale = 1
+    font_thickness = 1
+    text_color = (255, 255, 255)
+    text_color_bg = (0, 0, 0)
+    x, y = pos
+    text_size, _ = cv2.getTextSize(text, font, font_scale, font_thickness)
+    text_w, text_h = text_size
+    img = cv2.rectangle(img, pos, (x + text_w, y + text_h), text_color_bg, -1)
+    img = cv2.putText(
+        img,
+        text,
+        (x, y + text_h + font_scale - 1),
+        font,
+        font_scale,
+        text_color,
+        font_thickness,
+    )
+    return img
+
+def put_text_on_vid(vid, text):
+    for i in range(len(vid)):
+        vid[i] = put_text_on_img(vid[i], text)
+    return vid
+
+def viz_points(
+    pts,
+    instance_idx=None,
+    lines=None,
+    cam_pos=[0.0, 1.25, 3.0],
+    cam_lookat=[0.0, 0.0, 0.0],
+    cam_up=[0.0, 1.0, 0.0],
+    add_floor=False,
+    add_axis=False,
+    img_size=512,
+):
+    """A helper function to visualize points.
+    Args:
+        pts: (V, 3) or (N, V, 3) or a list of (V, 3)
+        instance_idx: (O+1) or a list of (O+1). If provided, the points will be colored according to the instance index.
+        lines: (R, 2) or a list of (R, 2). If provided, the lines will be drawn.
+        Other args self-explanatory.
+    Returns:
+        img: (H, W, 3) or (N, H, W, 3)
+    """
+    if "PYOPENGL_PLATFORM" not in os.environ:
+        os.environ["PYOPENGL_PLATFORM"] = "egl"
+    if "DISPLAY" not in os.environ:
+        os.environ["DISPLAY"] = ":10"
+
+    if isinstance(pts, list) and isinstance(instance_idx, list) and pts[0].ndim == 2:
+        if lines is None:
+            lines = [None] * len(pts)
+        if instance_idx is None:
+            instance_idx = [None] * len(pts)
+        imgs = [
+            viz_points(
+                pt,
+                istidx,
+                ln,
+                cam_pos,
+                cam_lookat,
+                cam_up,
+                add_floor,
+                add_axis,
+                img_size,
+            )
+            for pt, istidx, ln in zip(pts, instance_idx, lines)
+        ]
+        return np.stack(imgs)
+
+    # pts: V x 3 or N x V x 3
+    # instance_idx: O+1
+    # lines: R x 2
+    if pts.ndim == 2:
+        pts = pts[None]
+    if lines is not None and not isinstance(lines, list) and lines.ndim == 2:
+        lines = lines[None]
+    if instance_idx is None:
+        instance_idx = [0, pts.shape[1]]
+    colnames = ["yellow", "red"] + [
+        c for c in colors.keys() if c not in ["yellow", "red"]
+    ]
+
+    mv = MeshViewer(
+        use_offscreen=True,
+        width=img_size,
+        height=img_size,
+        cam_pos=cam_pos,
+        cam_lookat=cam_lookat,
+        cam_up=cam_up,
+        add_axis=add_axis,
+        add_floor=add_floor,
+    )
+    for oi, (st, en) in enumerate(zip(instance_idx[:-1], instance_idx[1:])):
+        mv.add_point_seq(pts[:, st:en, :3], color=colors[colnames[oi % len(colnames)]])
+        if lines is not None:
+            ln_seq = [
+                np.concatenate([pt[ln[:, 0], :3], pt[ln[:, 1], :3]], -1).reshape(
+                    [-1, 3]
+                )
+                for ln, pt in zip(lines, pts)
+            ]  # N x [R x 6]
+            mv.add_line_seq(ln_seq)
+
+    if pts.shape[0] == 1:
+        return mv.render()
+    else:
+        return mv.animate()
+
+def print_dict(d, prefix=""):
+    for k, v in d.items():
+        kk = prefix + k
+        if isinstance(v, dict):
+            print_dict(v, kk + "/")
+        elif isinstance(v, int) or isinstance(v, float) or isinstance(v, str):
+            print(kk, v)
+        elif isinstance(v, list):
+            print(kk, len(v))
+        else:
+            print(kk, v.shape)
+
+def append_to_file(fpath, txt):
+    with open(fpath, "a") as myfile:
+        myfile.write(txt)
+
+def trimesh_spheres_from_points(pt, color):
+    color = np.array(color)
+    if len(color.shape) == 1:
+        color = np.tile(color[None, :], [pt.shape[0], 1])
+
+    sm = trimesh.creation.uv_sphere(radius=0.05, count=[3, 3])
+    ret = []
+    for pid, p in enumerate(pt):
+        x = sm.copy()
+        x.visual.vertex_colors = color[pid]
+        x.vertices += p[None, :]
+        ret.append(x)
+    ret = trimesh.util.concatenate(ret)
+    return ret
+
+def load_binvox(filename):
+    with open(filename, "rb") as fpt:
+        vox = trimesh.exchange.binvox.load_binvox(fpt)
+    return vox
+
+def trimesh_show_points(pts, col):
+    s = trimesh.Scene()
+    s.add_geometry(trimesh.creation.axis())
+    s.add_geometry(trimesh_spheres_from_points(pts, col))
+    s.show()
+    return s
+
+def viz_smpl(bmout, faces, cam=None):
+    center = bmout.vertices.mean([0, 1])
+    mv = MeshViewer(
+        width=600,
+        height=600,
+        use_offscreen=True,
+        cam_pos=[3.0, 3.0, 3.0],
+        cam_lookat=center,
+        cam_up=[0.0, 0.0, 1.0],
+        add_axis=True,
+        add_floor=True,
+    )
+
+    meshes = []
+    cam_seq = []
+    for i in range(bmout.vertices.shape[0]):
+        if cam is not None:
+            cam_seq.append({k: dcn(v[i]) for k, v in cam.items()})
+
+        ms = pyrender.Mesh.from_trimesh(
+            trimesh.Trimesh(
+                vertices=bmout.vertices[i].detach().cpu().numpy(),
+                faces=faces,
+            )
+        )
+        meshes.append(ms)
+    mv.add_pyrender_mesh_seq(meshes, seq_type="mesh")
+    # mv.add_point_seq(dcn(bmout.joints))
+    if cam is not None:
+        mv.add_camera_seq(cam_seq)
+    if bmout.vertices.shape[0] == 1:
+        return mv.render()[None]
+    else:
+        return mv.animate()
+
+def show_points(j2d, imgs, color="green"):
+    assert color in ["green", "red", "blue"]
+    color = {"green": (0, 255, 0), "red": (255, 0, 0), "blue": (0, 0, 255)}[color]
+    ret = []
+    for img, j in zip(imgs, j2d):
+        img = img.copy()
+        for pt in j:
+            x, y = pt[:2]
+            if pt.shape[0] == 3 and pt[2] < 0.1:
+                continue
+            cv2.circle(img, (int(x), int(y)), 3, color, -1)
+        ret.append(img)
+    ret = np.stack(ret)
+    return ret
+
+class SMPL(smplx.SMPLLayer):
+    def __init__(
+        self,
+        *args,
+        joint_regressor_extra: Optional[str] = None,
+        update_hips: bool = False,
+        **kwargs
+    ):
+        """
+        Extension of the official SMPL implementation to support more joints.
+        Args:
+            Same as SMPLLayer.
+            joint_regressor_extra (str): Path to extra joint regressor.
+        """
+        super(SMPL, self).__init__(*args, **kwargs)
+        smpl_to_openpose = [
+            24,
+            12,
+            17,
+            19,
+            21,
+            16,
+            18,
+            20,
+            0,
+            2,
+            5,
+            8,
+            1,
+            4,
+            7,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+        ]
+
+        if joint_regressor_extra is not None:
+            self.register_buffer(
+                "joint_regressor_extra",
+                torch.tensor(
+                    pickle.load(open(joint_regressor_extra, "rb"), encoding="latin1"),
+                    dtype=torch.float32,
+                ),
+            )
+        self.register_buffer(
+            "joint_map", torch.tensor(smpl_to_openpose, dtype=torch.long)
+        )
+        self.update_hips = update_hips
+
+    def forward(self, *args, **kwargs) -> SMPLOutput:
+        """
+        Run forward pass. Same as SMPL and also append an extra set of joints if joint_regressor_extra is specified.
+        """
+        smpl_output = super(SMPL, self).forward(*args, **kwargs)
+        joints = smpl_output.joints[:, self.joint_map, :]
+        if self.update_hips:
+            joints[:, [9, 12]] = (
+                joints[:, [9, 12]]
+                + 0.25 * (joints[:, [9, 12]] - joints[:, [12, 9]])
+                + 0.5
+                * (joints[:, [8]] - 0.5 * (joints[:, [9, 12]] + joints[:, [12, 9]]))
+            )
+        if hasattr(self, "joint_regressor_extra"):
+            extra_joints = vertices2joints(
+                self.joint_regressor_extra, smpl_output.vertices
+            )
+            joints = torch.cat([joints, extra_joints], dim=1)
+        smpl_output.joints = joints
+        return smpl_output
+
+class MySMPL(SMPL):
+    def __init__(self):
+        super().__init__(
+            model_path="/move/u/chpatel/datasets/smpl_data/smpl/SMPL_NEUTRAL.pkl",
+            gender="neutral",
+            # joint_regressor_extra="/vision/u/chpatel/4D-Humans/example_data/cache/data/SMPL_to_J19.pkl",
+        )
+
+def random_camera(center):
+    is_batch = center.ndim == 2
+    if not is_batch:
+        center = center[None]
+    B = center.shape[0]
+
+    # target = center + torch.randn_like(center) * 1.0
+    target = center
+
+    # z = torch.randn_like(center[:, 2:]) * 1
+    # xy = torch.zeros_like(center[:, :2])
+    # xy = xy + torch.randn_like(xy).abs() * 1 + 0
+    # position = torch.cat([xy, z], -1)
+    position = center + torch.tensor([2.0, 2.0, 1.0]).float()[None]
+    position = position + torch.randn_like(position) * 0.0
+
+    up = torch.zeros_like(center)
+    up[..., -1] = 1
+
+    # T = makeLookAt(position.numpy(), target.numpy(), up.numpy())
+    T = np.stack(
+        [
+            makeLookAt(p, t, u)
+            for p, t, u in zip(position.numpy(), target.numpy(), up.numpy())
+        ]
+    )
+
+    T = torch.tensor(T).float()
+    T2 = T.clone()
+    T2[:, :3, :3] = T[:, :3, :3].transpose(-1, -2)
+    T2[:, :3, 3] = (-T[:, :3, :3].transpose(-1, -2) @ T[:, :3, 3:])[..., 0]
+
+    width = height = 600
+    yfov = np.pi / 4.0
+    K = pyrender.PerspectiveCamera(
+        yfov=yfov, aspectRatio=float(width) / height
+    ).get_projection_matrix()
+    K = torch.tensor(K).float()
+
+    K = K[None].expand(B, -1, -1)
+    width = torch.tensor([width] * B).float()
+    height = torch.tensor([height] * B).float()
+    yfov = torch.tensor([yfov] * B).float()
+
+    P = K @ T2
+
+    cam = {
+        "T": T,
+        "K": K,
+        "P": P,
+        # "target": target,
+        # "position": position,
+        # "up": up,
+        "yfov": yfov,
+        "width": width,
+        "height": height,
+    }
+    if not is_batch:
+        cam = {k: v[0] for k, v in cam.items()}
+    return cam
+
+
+def projection(joints, cam):
+    is_batch = joints.ndim == 3
+    if not is_batch:
+        joints = joints[None]
+        cam = {k: v[None] for k, v in cam.items()}
+
+    J = joints
+    J = torch.cat([J, torch.ones_like(J[..., :1])], -1)
+    J = J @ cam["P"].transpose(-1, -2)
+    J = J[..., :3] / J[..., 3:]
+    J = J / J[..., 2:]
+
+    h, w = cam["height"], cam["width"]
+    assert torch.allclose(w, h)
+    J = J * w[:, None, None] / 2 + w[:, None, None] / 2
+    J[..., 1] = h[:, None] - J[..., 1]
+
+    conf = (
+        (J[..., 0] >= 0)
+        & (J[..., 0] <= w[:, None])
+        & (J[..., 1] >= 0)
+        & (J[..., 1] <= h[:, None])
+    )
+    J[..., 2] = conf.float()
+    return J
+
+
+def j2d_to_y(j2d, h, w):
+    assert torch.allclose(h, w)
+    y = j2d[..., :2].clone() / w[:, None, None] - 0.5
+    y = y.view(y.shape[0], -1)
+    return y
+
+
+def get_cur_y(x, data, smpl):
+    device = x.device
+
+    temp = {}
+    temp["global_orient"] = rotation_6d_to_matrix(x[:, :6])
+    temp["body_pose"] = rotation_6d_to_matrix(x[:, 6:].unflatten(-1, (-1, 6)))
+    temp["betas"] = data["betas"].to(device)
+    temp["transl"] = data["transl"].to(device)
+
+    bmout = smpl(**temp)
+    cam = {
+        k.replace("cam_", "", 1): v.to(device)
+        for k, v in data.items()
+        if k.startswith("cam_")
+    }
+    j2d = projection(bmout.joints, cam)
+    y = j2d_to_y(j2d, cam["height"], cam["width"])
+    return y

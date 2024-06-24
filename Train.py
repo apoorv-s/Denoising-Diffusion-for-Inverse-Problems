@@ -1,5 +1,5 @@
 import argparse
-from Configs.Configs import BraninConfig, PoseConfig
+from Configs.Configs import BraninConfig, PoseMLPConfig
 from Core.Utils import DDPM
 
 if __name__ == "__main__":
@@ -13,8 +13,10 @@ if __name__ == "__main__":
     
     if args.model_name == 'branin':
         config = BraninConfig()
-    elif args.model_name == 'pose':
-        config = PoseConfig()
+    elif args.model_name == 'pose_mlp':
+        config = PoseMLPConfig()
+    elif args.model_name == 'pose_transformer':
+        config = PoseMLPConfig()
     else:
         raise NameError("Unknown model:", args.model_name)
         

@@ -7,7 +7,7 @@ from tensorboardX import SummaryWriter
 from tqdm import trange
 
 from Core.Dataset import BraninDataset, PoseModelDataset
-from Configs.Configs import BraninConfig, PoseConfig
+from Configs.Configs import BraninConfig, PoseMLPConfig, PoseTransformersConfig
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -53,8 +53,11 @@ class DDPM():
         if model_name == 'branin':
             self.model_class = BraninDiffusionModel
             self.dataset_class = BraninDataset
-        elif model_name == "pose":
-            self.model_class = PoseModelDiffusion
+        elif model_name == "pose_mlp":
+            self.model_class = PoseMLPDiffusion
+            self.dataset_class = PoseModelDataset
+        elif model_name == "pose_transformer":
+            self.model_class = PoseTranformerDiffusion
             self.dataset_class = PoseModelDataset
         else:
             raise NameError("Unknown model class:", model_name)
@@ -138,12 +141,12 @@ class DDPM():
         x_mat[-1, :, :] = torch.randn((n_test_points, self.pretrained_config.inp_dim))
         y_inp = torch.ones((n_test_points, self.pretrained_config.out_dim))*target_y
         
-        for it in range(self.pretrained_config.n_time-1, -1, -1):
+        for it in range(self.pretrained_config.n_time-1, 0, -1):
             t_inp = torch.ones((n_test_points, 1))*it/self.pretrained_config.n_time
             cond_pred_noise = self.pretrained_model(x_mat[it, :, :], y_inp, t_inp, mode)
             uncond_pred_noise = self.pretrained_model(x_mat[it, :, :], None, t_inp, mode)
             pred_noise = (1 + cond_weight)*cond_pred_noise + cond_weight*uncond_pred_noise
-            z = torch.randn_like(x_mat[it, :, :])            
+            z = torch.randn_like(x_mat[it, :, :]) if it > 1 else 0            
             x_mat[it - 1, :, :] = (x_mat[it, :, :] - (om_alpha[it]*pred_noise/sqrt_om_alpha_bar[it]))/(alpha[it].sqrt()) + beta[it]*z
             
         return x_mat
@@ -153,7 +156,7 @@ class DDPM():
         self.pretrained_description = saved_obj["description"]
         self.pretrained_config = saved_obj["config"]
         self.pretrained_model = self.model_class(saved_obj["config"])
-        self.pretrained_model.load_state_dict(saved_obj["state_dict"])
+        print(self.pretrained_model.load_state_dict(saved_obj["state_dict"]))
         self.pretrained_model.eval()
 
 class BraninDiffusionModel(nn.Module):
@@ -214,8 +217,66 @@ class BraninDiffusionModel(nn.Module):
         out=self.final_layer(xty_embed)
         return out        
 
-class PoseModelDiffusion(nn.Module):
-    def __init__(self, config:PoseConfig) -> None:
+class PoseMLPDiffusion(nn.Module):
+    def __init__(self, config:PoseMLPConfig) -> None:
+        super().__init__()
+        self.drop_prob=config.drop_prob
+        self.n_hid_dim = config.n_hid_dim
+        self.t_embed_nn=nn.Sequential(*[nn.Linear(1, config.n_hid_dim),
+                                       nn.BatchNorm1d(config.n_hid_dim),
+                                       get_act_fn(config.act_fn)(),
+                                       nn.Linear(config.n_hid_dim, config.n_hid_dim)])
+        self.y_embed_nn=nn.Sequential(*[nn.Linear(config.out_dim, config.n_hid_dim),
+                                       nn.BatchNorm1d(config.n_hid_dim),
+                                       get_act_fn(config.act_fn)(),
+                                       nn.Linear(config.n_hid_dim, config.n_hid_dim)])
+        self.ty_embed_nn=nn.Sequential(*[nn.Linear(2*config.n_hid_dim, config.n_hid_dim),
+                                       nn.BatchNorm1d(config.n_hid_dim),
+                                       get_act_fn(config.act_fn)(),
+                                       nn.Linear(config.n_hid_dim, config.n_hid_dim)])
+        self.x_embed_nn=nn.Sequential(*[nn.Linear(config.inp_dim, config.n_hid_dim),
+                                       nn.BatchNorm1d(config.n_hid_dim),
+                                       get_act_fn(config.act_fn)(),
+                                       nn.Linear(config.n_hid_dim, config.n_hid_dim)])
+        self.xty_embed_nn=nn.Sequential(*[nn.Linear(2*config.n_hid_dim, config.n_hid_dim),
+                                       nn.BatchNorm1d(config.n_hid_dim),
+                                       get_act_fn(config.act_fn)(),
+                                       nn.Linear(config.n_hid_dim, config.n_hid_dim)])
+        
+        self.resnets=nn.ModuleList()
+        for _ in range(config.n_resnets):
+            self.resnets.append(ResNet(config.n_hid_dim, config.n_hid_dim, config.act_fn))
+            
+        self.final_layer=nn.Sequential(*[nn.Linear(config.n_hid_dim, config.n_hid_dim),
+                                       nn.BatchNorm1d(config.n_hid_dim),
+                                       get_act_fn(config.act_fn)(),
+                                       nn.Linear(config.n_hid_dim, config.inp_dim)])
+        
+    def forward(self, noisy_x, y, t, mode):
+        t_embed=self.t_embed_nn(t)
+        if mode=="train":
+            y_embed=self.y_embed_nn(y)
+            y_embed=y_embed*(torch.bernoulli(torch.ones(y_embed.shape[0], 1)-self.drop_prob).to(device))
+        elif mode=="eval":
+            if y is None:
+                y_embed=torch.zeros((noisy_x.shape[0], self.n_hid_dim))
+            else:
+                y_embed=self.y_embed_nn(y)
+        else:
+            raise ValueError("unknown mode:", mode)
+        
+        ty_embed=self.ty_embed_nn(torch.cat([t_embed, y_embed], dim=1))
+        x_embed=self.x_embed_nn(noisy_x)
+        
+        xty_embed=self.xty_embed_nn(torch.cat([ty_embed, x_embed], dim=1))
+        for temp_resnet in self.resnets:
+            xty_embed=temp_resnet(xty_embed)
+        
+        out=self.final_layer(xty_embed)
+        return out
+    
+class PoseTranformerDiffusion(nn.Module):
+    def __init__(self, config:PoseTransformersConfig) -> None:
         super().__init__()
         pass
            
