@@ -21,6 +21,12 @@ from typing import Optional
 import torch
 import pickle
 
+from pytorch3d.transforms.rotation_conversions import (
+    axis_angle_to_matrix,
+    matrix_to_rotation_6d,
+    rotation_6d_to_matrix,
+)
+
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 COMPRESS_PARAMS = [cv2.IMWRITE_PNG_COMPRESSION, 9]
 
@@ -979,3 +985,13 @@ def get_cur_y(x, data, smpl):
     j2d = projection(bmout.joints, cam)
     y = j2d_to_y(j2d, cam["height"], cam["width"])
     return y
+
+
+
+
+
+
+
+
+
+

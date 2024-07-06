@@ -10,4 +10,4 @@
 
 conda activate diff
 echo $CONDA_PREFIX
-python Train.py --run_number 5 --model_name 'branin'
+python Train.py --run_number 6 --model_name 'branin'

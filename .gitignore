@@ -156,3 +156,5 @@ SavedResults/
 *.out
 *.tfevents*
 *.pt
+Data/
+SupportingFiles/
