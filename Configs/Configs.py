@@ -70,10 +70,11 @@ class PoseTransformersConfig():
         self.x_dim_2 = 6
         self.y_dim_1 = 25
         self.y_dim_2 = 2
-            
+        
+        # Training data
         self.data_dir = "./Data/PoseData"
         self.smpl_model_dir = "./SupportingFiles/SMPLModel/smpl/models/basicmodel_m_lbs_10_207_0_v1.1.0.pkl"
-        self.save_dir = "./Models/PoseMLP"
+        self.subset = "full"
         
         # Model parameters
         self.emb_dim = 256
@@ -89,15 +90,17 @@ class PoseTransformersConfig():
         self.mlp_act_fn = nn.GELU
         
         
-        # Diffusion model parameters:
+        # Diffusion model parameters
         self.beta_range = (1e-4, 0.02)
         self.diff_drop_prob = 0.1
         self.n_time = 500
         
         # Training setup parameters
+        self.n_epochs = 500
         self.n_epochs_bw_saves = 50
         self.batch_size = 1024
         self.n_workers = 4
         self.lr = 1e-4
         self.wt_decay = 1e-3
+        self.save_dir = "./Models/PoseTransformer"
         

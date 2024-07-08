@@ -12,6 +12,8 @@ from Core.Transformers import AttentionBlock, CrossAttentionBlock
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
+## Functions
 def diffusion_noise_schedule(n_steps, beta_range):
     beta=torch.linspace(beta_range[0], beta_range[1], n_steps)
     alpha=1-beta
@@ -19,9 +21,18 @@ def diffusion_noise_schedule(n_steps, beta_range):
     om_alpha_bar=1-alpha_bar
     return [alpha, beta, alpha_bar.sqrt(), om_alpha_bar.sqrt()]
 
+
 def get_act_fn(act_fn):
     return {'relu':nn.ReLU, 'tanh':nn.Tanh, 'gelu':nn.GELU}[act_fn]
 
+
+def generate_discription(config, run_number = None):
+        config_vars = vars(config)
+        config_str = f"Run number: {run_number}\nConfig:\n"
+        config_str += "\n".join(f"    {key} = {repr(value)}" for key, value in config_vars.items())
+        return config_str
+
+# Classes
 class ResNet(nn.Module):
     def __init__(self, inp_dim, hid_dim, act_fn) -> None:
         super().__init__()
@@ -42,13 +53,8 @@ class ResNet(nn.Module):
         temp_inp=self.bn2(temp_inp)
         out=self.act2(temp_inp+inp)
         return out
-
-def generate_discription(config, run_number = None):
-        config_vars = vars(config)
-        config_str = f"Run number: {run_number}\nConfig:\n"
-        config_str += "\n".join(f"    {key} = {repr(value)}" for key, value in config_vars.items())
-        return config_str
     
+
 class DDPM():
     def __init__(self, model_name:str) -> None:
         if model_name == 'branin':
@@ -160,6 +166,7 @@ class DDPM():
         print(self.pretrained_model.load_state_dict(saved_obj["state_dict"]))
         self.pretrained_model.eval()
 
+
 class BraninDiffusionModel(nn.Module):
     def __init__(self, config:BraninConfig) -> None:
         super().__init__()
@@ -218,6 +225,7 @@ class BraninDiffusionModel(nn.Module):
         out=self.final_layer(xty_embed)
         return out        
 
+
 class PoseMLPDiffusion(nn.Module):
     def __init__(self, config:PoseMLPConfig) -> None:
         super().__init__()
@@ -275,6 +283,7 @@ class PoseMLPDiffusion(nn.Module):
         
         out=self.final_layer(xty_embed)
         return out
+    
     
 class PoseTranformerDiffusion(nn.Module):
     def __init__(self, config:PoseTransformersConfig) -> None:
