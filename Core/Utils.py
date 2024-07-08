@@ -8,6 +8,7 @@ from tqdm import trange
 
 from Core.Dataset import BraninDataset, PoseModelDataset
 from Configs.Configs import BraninConfig, PoseMLPConfig, PoseTransformersConfig
+from Core.Transformers import AttentionBlock, CrossAttentionBlock
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -278,10 +279,92 @@ class PoseMLPDiffusion(nn.Module):
 class PoseTranformerDiffusion(nn.Module):
     def __init__(self, config:PoseTransformersConfig) -> None:
         super().__init__()
-        pass
-           
-    def forward(self, noisy_x, y, t, mode):
-        pass
+        
+        self.x_dim_1 = config.x_dim_1
+        self.x_dim_2 = config.x_dim_2
+        self.y_dim_1 = config.y_dim_1
+        self.y_dim_2 = config.y_dim_2
+        
+        self.t_dim = 1
+        
+        self.emb_dim = config.emb_dim
+        
+        self.y_drop_prob = config.diff_drop_prob
+        
+        # x_shape: B x  x_dim_1 x x_dim_2
+        self.x_emb = nn.Linear(self.x_dim_2, self.emb_dim)
+        self.x_pos_emb = nn.Parameter(torch.randn(self.x_dim_1,
+                                                  self.emb_dim))    
+        
+        # y_shape: B x y_dim_1 x y_dim_2
+        self.y_emb = nn.Linear(self.y_dim_2, self.emb_dim)
+        self.y_pos_emb = nn.Parameter(torch.randn(self.y_dim_1,
+                                                  self.emb_dim))
+        
+        # t: B x 1 
+        self.t_emb = nn.Linear(self.t_dim, self.emb_dim)
+        
+        temp_list = []
+        for _ in range(config.n_x_attn):
+            temp_list.append(AttentionBlock(config.n_heads, config.emb_dim,
+                                            config.kq_dim, config.mlp_hid_dim,
+                                            config.mlp_act_fn))
+        self.x_attn = nn.ModuleList(temp_list)
+        
+        temp_list = []
+        for _ in range(config.n_y_attn):
+            temp_list.append(AttentionBlock(config.n_heads, config.emb_dim,
+                                            config.kq_dim, config.mlp_hid_dim,
+                                            config.mlp_act_fn))
+        self.y_attn = nn.ModuleList(temp_list)
+        
+        temp_list = []
+        for _ in range(config.n_xyt_attn):
+            temp_list.append(CrossAttentionBlock(config.n_heads, config.emb_dim,
+                                                 config.kq_dim, config.emb_dim, config.mlp_hid_dim,
+                                                 config.mlp_act_fn))
+        self.xy_cross_attn = nn.ModuleList(temp_list)
+        
+        temp_list = []
+        for _ in range(config.n_xyt_attn):
+            temp_list.append(CrossAttentionBlock(config.n_heads, config.emb_dim,
+                                                 config.kq_dim, config.emb_dim, config.mlp_hid_dim,
+                                                 config.mlp_act_fn))
+        self.xt_cross_attn = nn.ModuleList(temp_list)
+        
+        self.out_layer = nn.Linear(config.emb_dim, config.x_dim_2)
+    
+    def forward(self, x, y, t, mode):
+        batch_size = x.shape[0]
+        
+        x = x.reshape(batch_size, self.x_dim_1, self.x_dim_2)
+        x = self.x_emb(x) + self.x_pos_emb
+        
+        if y is None:
+            y = torch.zeros((batch_size, self.y_dim_1, self.emb_dim))
+        else:
+            y = y.reshape(batch_size, self.y_dim_1, self.y_dim_2)
+            y = self.y_emb(y)
+
+        if mode=="train":
+            y =y*(torch.bernoulli(torch.ones(batch_size, 1, 1)-self.y_drop_prob).to(device))
+        y = y + self.y_pos_emb
+        
+        t = self.t_emb(t[:, None, None])
+        
+        for x_attn in self.x_attn:
+            x = x_attn(x)
+
+        for y_attn in self.y_attn:
+            y = y_attn(y)
+        
+        for i in range(len(self.xy_cross_attn)):
+            x = self.xt_cross_attn[i](x, t)
+            x = self.xy_cross_attn[i](x, y)
+            
+        x = self.out_layer(x)
+        x = x.reshape(batch_size, self.x_dim_1*self.x_dim_2)
+        return x
     
 
 
