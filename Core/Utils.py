@@ -75,13 +75,13 @@ class DDPM():
         description = generate_discription(config, run_number)
         print("****** Training Initiated ******")
         print(description)
-        
+        print("training on", device)
         train_dir=config.save_dir+"/run"+str(run_number)+"/train"
-        os.makedirs(train_dir, exist_ok=False)
+        os.makedirs(train_dir, exist_ok=True)
         
         model = self.model_class(config).to(device)
         dataset=self.dataset_class(config)
-        dataloader=DataLoader(dataset, batch_size=config.batch_size)
+        dataloader=DataLoader(dataset, batch_size=config.batch_size, num_workers=config.n_workers, pin_memory=True)
         optimizer=torch.optim.Adam(model.parameters(), lr=config.lr)
         loss_function = nn.MSELoss()
         
@@ -101,18 +101,19 @@ class DDPM():
             epoch_loss = 0.0
             for ind, batch_data in enumerate(dataloader):
                 optimizer.zero_grad()
-                data_x = batch_data['x']
+                data_x = batch_data['x'].view(-1, batch_data['x'].shape[-1])
                 batch_size=data_x.shape[0]
                 inp_noise=torch.randn_like(data_x)
                 inp_t_ind=torch.randint(0, config.n_time, (batch_size, 1))
                 inp_x = (data_x*sqrt_alpha_bar[inp_t_ind] + inp_noise*sqrt_om_alpha_bar[inp_t_ind]).to(device)
-                inp_y = batch_data['y'].to(device)
+                inp_y = batch_data['y'].view(-1, batch_data['y'].shape[-1]).to(device)
                 inp_t = (inp_t_ind/config.n_time).to(device)
                 pred_noise = model(inp_x, inp_y, inp_t, mode).to(device)
                 loss = loss_function(pred_noise, inp_noise.to(device)).to(device)
                 loss.backward()
                 optimizer.step()
                 running_loss=running_loss+loss.item()
+                # print(ind, running_loss)
                 if (ind + 1)%10==0:
                     writer.add_scalar('running_train_loss', running_loss, counter)
                     counter=counter+1
@@ -359,7 +360,7 @@ class PoseTranformerDiffusion(nn.Module):
             y =y*(torch.bernoulli(torch.ones(batch_size, 1, 1)-self.y_drop_prob).to(device))
         y = y + self.y_pos_emb
         
-        t = self.t_emb(t[:, None, None])
+        t = self.t_emb(t[:, None])
         
         for x_attn in self.x_attn:
             x = x_attn(x)

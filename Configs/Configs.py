@@ -45,15 +45,15 @@ class PoseMLPConfig():
         self.act_lyr = "batch"
         self.act_fn = "gelu"
         
-        self.batch_size = 1024
-        self.n_workers = 4
+        self.batch_size = 16
+        self.n_workers = 1
         self.lr = 1e-4
         self.wt_decay = 1e-3
         
         self.save_bw_ep = True
         self.n_epochs = 500
-        self.n_resnets = 3
-        self.n_hid_dim = 128
+        self.n_resnets = 5
+        self.n_hid_dim = 512
         
         self.drop_prob = 0.1
         self.n_time = 500
@@ -98,8 +98,8 @@ class PoseTransformersConfig():
         # Training setup parameters
         self.n_epochs = 500
         self.n_epochs_bw_saves = 50
-        self.batch_size = 1024
-        self.n_workers = 4
+        self.batch_size = 16
+        self.n_workers = 1
         self.lr = 1e-4
         self.wt_decay = 1e-3
         self.save_dir = "./Models/PoseTransformer"

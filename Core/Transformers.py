@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_heads, kq_dim, emb_dim,
                  qk_norm = True, qkv_bias=False, attention_drop=0.0,
@@ -10,7 +12,7 @@ class MultiHeadAttention(nn.Module):
         self.kq_dim = kq_dim
         self.emb_dim = emb_dim
         
-        self.norm_const = torch.sqrt(torch.tensor([kq_dim]))
+        self.norm_const = torch.sqrt(torch.tensor([kq_dim])).to(device)
         
         # can concatenate the three matrices to get a single matrix
         self.query = nn.Linear(emb_dim, n_heads*kq_dim, bias=qkv_bias)
@@ -39,7 +41,6 @@ class MultiHeadAttention(nn.Module):
         
         q = self.q_norm(q)
         k = self.k_norm(k)
-        
         attention = torch.matmul(q, k.transpose(-2, -1))/(self.norm_const)
         attention = attention.softmax(dim=-1) # (batch_size, n_heads, seq_len, seq_len)
         attention = self.attention_drop(attention)
@@ -61,7 +62,7 @@ class MultiHeadCrossAttention(nn.Module):
         self.emb_dim = emb_dim
         self.context_dim = context_dim
         
-        self.norm_const = torch.sqrt(torch.tensor([kq_dim]))
+        self.norm_const = torch.sqrt(torch.tensor([kq_dim])).to(device)
         
         # can concatenate the three matrices to get a single matrix
         self.query = nn.Linear(emb_dim, n_heads*kq_dim, bias=qkv_bias)
