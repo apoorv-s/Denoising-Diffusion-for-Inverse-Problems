@@ -135,32 +135,32 @@ class PoseModelDataset(Dataset):
         y = j2d_to_y(data["j2d"], data["cam_height"], data["cam_width"])
         return x, y
 
-    # def get_sequence_data(self, idx):
-    #     return self.__getitem__(idx, frame_idx=-1)
+    def get_sequence_data(self, idx):
+        return self.__getitem__(idx, frame_idx=-1)
 
-    # def viz(self, x, data, is_gt=False, is_inp=False):
-    #     B = x.shape[0]
-    #     data = copy.deepcopy(data)
+    def viz(self, x, data, is_gt=False, is_inp=False):
+        B = x.shape[0]
+        data = copy.deepcopy(data)
 
-    #     data["global_orient"] = rotation_6d_to_matrix(x[:, :6])
-    #     data["body_pose"] = rotation_6d_to_matrix(x[:, 6:].unflatten(-1, (-1, 6)))
+        data["global_orient"] = rotation_6d_to_matrix(x[:, :6])
+        data["body_pose"] = rotation_6d_to_matrix(x[:, 6:].unflatten(-1, (-1, 6)))
 
-    #     bmout = self.smpl(**data)
-    #     cam = {
-    #         k.replace("cam_", "", 1): v for k, v in data.items() if k.startswith("cam_")
-    #     }
-    #     if is_inp:
-    #         bmout.vertices += 10000
-    #         img = viz_smpl(bmout, self.smpl.faces, cam)
-    #         img = show_points(dcn(data["j2d"]), img, color="green")
-    #         return img
+        bmout = self.smpl(**data)
+        cam = {
+            k.replace("cam_", "", 1): v for k, v in data.items() if k.startswith("cam_")
+        }
+        if is_inp:
+            bmout.vertices += 10000
+            img = viz_smpl(bmout, self.smpl.faces, cam)
+            img = show_points(dcn(data["j2d"]), img, color="green")
+            return img
 
-    #     img = viz_smpl(bmout, self.smpl.faces, cam)
-    #     img = show_points(dcn(data["j2d"]), img, color="green")
-    #     if not is_gt:
-    #         pred_j2d = projection(bmout.joints, cam)
-    #         img = show_points(pred_j2d, img, color="red")
-    #     return img
+        img = viz_smpl(bmout, self.smpl.faces, cam)
+        img = show_points(dcn(data["j2d"]), img, color="green")
+        if not is_gt:
+            pred_j2d = projection(bmout.joints, cam)
+            img = show_points(pred_j2d, img, color="red")
+        return img
     
 if __name__ == "__main__":
     import IPython
