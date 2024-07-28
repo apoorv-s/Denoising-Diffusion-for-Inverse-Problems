@@ -1,5 +1,5 @@
 import torch.nn as nn
-class BraninConfig():
+class BraninMLPConfig():
     def __init__(self) -> None:
         # data
         self.inp_dim = 2
@@ -12,7 +12,7 @@ class BraninConfig():
         self.act_fn = "gelu"
         
         self.batch_size = 1024
-        self.n_workers = 4
+        self.n_workers = 1
         self.lr = 1e-6
         self.wt_decay = 1e-4
         
@@ -29,6 +29,41 @@ class BraninConfig():
         
         self.n_epochs_bw_saves = 50
     
+class BraninTransformerConfig():
+    def __init__(self) -> None:
+        # Data parameters
+        self.inp_dim = 2
+        self.out_dim = 1
+        
+        # Model parameters
+        self.emb_dim = 64
+        self.kq_dim = 32
+        self.mlp_hid_dim = 64
+        
+        self.n_x_attn = 2
+        self.n_y_attn = 2
+        self.n_xyt_attn = 2
+        
+        self.n_heads = (self.emb_dim + 32 - 1)//32
+        
+        self.mlp_act_fn = nn.GELU
+        
+        
+        # Diffusion model parameters
+        self.beta_range = (1e-4, 0.02)
+        self.diff_drop_prob = 0.1
+        self.n_time = 500
+        
+        # Training setup parameters
+        self.n_epochs = 500
+        self.n_epochs_bw_saves = 50
+        self.batch_size = 1024
+        self.n_workers = 1
+        self.lr = 1e-4
+        self.wt_decay = 1e-3
+        self.save_dir = "./Models/BraninTransformer"
+
+
 class PoseMLPConfig():
     def __init__(self) -> None:
         # data

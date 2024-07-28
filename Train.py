@@ -1,6 +1,6 @@
 import argparse
-from Configs.Configs import BraninConfig, PoseMLPConfig, PoseTransformersConfig
-from Core.Utils import DDPM
+from Configs.Configs import BraninMLPConfig, PoseMLPConfig, PoseTransformersConfig, BraninTransformerConfig
+from Core.DDPM import DDPM
 
 if __name__ == "__main__":
     print("Initiating Training")
@@ -11,8 +11,10 @@ if __name__ == "__main__":
     parser.add_argument("--run_number", required=True)
     args = parser.parse_args()
     
-    if args.model_name == 'branin':
-        config = BraninConfig()
+    if args.model_name == 'branin_mlp':
+        config = BraninMLPConfig()
+    elif args.model_name == 'branin_transformer':
+        config = BraninTransformerConfig()
     elif args.model_name == 'pose_mlp':
         config = PoseMLPConfig()
     elif args.model_name == 'pose_transformer':
