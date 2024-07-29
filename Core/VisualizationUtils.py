@@ -21,13 +21,13 @@ from typing import Optional
 import torch
 import pickle
 
-from pytorch3d.transforms.rotation_conversions import (
+from Core.Rotations import (
     axis_angle_to_matrix,
     matrix_to_rotation_6d,
     rotation_6d_to_matrix,
 )
 
-os.environ["PYOPENGL_PLATFORM"] = "egl"
+# os.environ["PYOPENGL_PLATFORM"] = "egl"
 COMPRESS_PARAMS = [cv2.IMWRITE_PNG_COMPRESSION, 9]
 
 colors = {
@@ -628,8 +628,8 @@ def viz_points(
     Returns:
         img: (H, W, 3) or (N, H, W, 3)
     """
-    if "PYOPENGL_PLATFORM" not in os.environ:
-        os.environ["PYOPENGL_PLATFORM"] = "egl"
+    # if "PYOPENGL_PLATFORM" not in os.environ:
+    #     os.environ["PYOPENGL_PLATFORM"] = "egl"
     if "DISPLAY" not in os.environ:
         os.environ["DISPLAY"] = ":10"
 

@@ -71,7 +71,8 @@ class PoseMLPConfig():
         self.out_dim = 25*2
         
         self.data_dir = "./Data/PoseData"
-        self.smpl_model_dir = "./SupportingFiles/SMPLModel/smpl/models/basicmodel_m_lbs_10_207_0_v1.1.0.pkl"
+        # self.smpl_model_dir = "./SupportingFiles/SMPLModel/smpl/models/basicmodel_m_lbs_10_207_0_v1.1.0.pkl"
+        self.smpl_model_dir = "./SupportingFiles/SMPLModel/smpl/models/SMPL_NEUTRAL.pkl"
         self.save_dir = "./Models/PoseMLP"
         
         self.subset = "full"

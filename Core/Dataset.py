@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 import numpy as np
 import copy
 import glob
-from pytorch3d.transforms.rotation_conversions import (
+from Core.Rotations import (
     axis_angle_to_matrix,
     matrix_to_rotation_6d,
     rotation_6d_to_matrix,
@@ -66,6 +66,8 @@ class PoseModelDataset(Dataset):
             self.sequences = self.sequences * 6
         elif subset == "full":
             self.sequences = sorted(glob.glob(self.data_dir + "/*/*/*_poses.npz"))
+        
+        # self.sequences = sorted(glob.glob(self.data_dir + "/*.npz"))
 
         print("Number of sequences", len(self.sequences))
         self.smpl = SMPL(config.smpl_model_dir)
