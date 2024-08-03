@@ -104,6 +104,7 @@ class DDPM():
     def sample(self, target_y, n_test_points, cond_weight):
         assert self.pretrained_model, "Load pretrained model"
         mode = "eval"
+        self.pretrained_model.to(device)
         self.pretrained_model.eval()
         
         [alpha, beta, sqrt_alpha_bar,
@@ -111,18 +112,28 @@ class DDPM():
                                                      self.pretrained_config.beta_range)
         om_alpha = 1 - alpha
         
-        x_mat = torch.zeros((self.pretrained_config.n_time, n_test_points, self.pretrained_config.inp_dim))
-        x_mat[-1, :, :] = torch.randn((n_test_points, self.pretrained_config.inp_dim))
-        y_inp = torch.ones((n_test_points, self.pretrained_config.out_dim))*target_y
+        # Move tensors to device
+        alpha = alpha.to(device)
+        beta = beta.to(device)
+        sqrt_alpha_bar = sqrt_alpha_bar.to(device)
+        sqrt_om_alpha_bar = sqrt_om_alpha_bar.to(device)
+        om_alpha = om_alpha.to(device)
         
-        for it in range(self.pretrained_config.n_time-1, 0, -1):
-            t_inp = torch.ones((n_test_points, 1))*it/self.pretrained_config.n_time
-            cond_pred_noise = self.pretrained_model(x_mat[it, :, :], y_inp, t_inp, mode)
-            uncond_pred_noise = self.pretrained_model(x_mat[it, :, :], None, t_inp, mode)
-            pred_noise = (1 + cond_weight)*cond_pred_noise + cond_weight*uncond_pred_noise
-            z = torch.randn_like(x_mat[it, :, :]) if it > 1 else 0            
-            x_mat[it - 1, :, :] = (x_mat[it, :, :] - (om_alpha[it]*pred_noise/sqrt_om_alpha_bar[it]))/(alpha[it].sqrt()) + beta[it]*z
-            
+        x_mat = torch.zeros((self.pretrained_config.n_time, n_test_points, self.pretrained_config.inp_dim), device=device)
+        x_mat[-1, :, :] = torch.randn((n_test_points, self.pretrained_config.inp_dim), device=device)
+        y_inp = torch.ones((n_test_points, self.pretrained_config.out_dim), device=device) * target_y
+
+        with torch.no_grad():
+            for it in trange(self.pretrained_config.n_time - 1, 0, -1):
+                t_inp = torch.ones((n_test_points, 1), device=device) * it / self.pretrained_config.n_time
+                cond_pred_noise = self.pretrained_model(x_mat[it, :, :], y_inp, t_inp, mode)
+                uncond_pred_noise = self.pretrained_model(x_mat[it, :, :], None, t_inp, mode)
+                pred_noise = (1 + cond_weight) * cond_pred_noise + cond_weight * uncond_pred_noise
+                z = torch.randn_like(x_mat[it, :, :], device=device) if it > 1 else torch.zeros_like(x_mat[it, :, :], device=device)
+                x_mat[it - 1, :, :] = (x_mat[it, :, :] - (om_alpha[it] * pred_noise / sqrt_om_alpha_bar[it])) / (alpha[it].sqrt()) + beta[it] * z
+                del cond_pred_noise, uncond_pred_noise, pred_noise, z, t_inp  # Clear memory of unnecessary variables
+                torch.cuda.empty_cache()
+        
         return x_mat
         
     def load_pretrained_model(self, model_path):

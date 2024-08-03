@@ -36,9 +36,9 @@ class BraninTransformerConfig():
         self.out_dim = 1
         
         # Model parameters
-        self.emb_dim = 64
-        self.kq_dim = 32
-        self.mlp_hid_dim = 64
+        self.emb_dim = 128
+        self.kq_dim = 64
+        self.mlp_hid_dim = 128
         
         self.n_x_attn = 2
         self.n_y_attn = 2

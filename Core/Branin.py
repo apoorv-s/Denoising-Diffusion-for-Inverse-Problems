@@ -137,7 +137,7 @@ class BraninTranformerDiffusion(nn.Module):
         x = self.x_emb(x) + self.x_pos_emb
         
         if y is None:
-            y = torch.zeros((batch_size, self.y_dim_1, self.emb_dim))
+            y = torch.zeros((batch_size, self.y_dim_1, self.emb_dim)).to(device)
         else:
             y = y.reshape(batch_size, self.y_dim_1, self.y_dim_2)
             y = self.y_emb(y)
