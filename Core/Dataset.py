@@ -55,19 +55,19 @@ class PoseModelDataset(Dataset):
     def __init__(self, config) -> None:
         super().__init__()
         self.data_dir = config.data_dir
-        subset = config.subset
-        assert subset in ["oneseq", "cmu", "full"]
-        if subset == "oneseq":
-            self.sequences = sorted(glob.glob(self.data_dir + "/CMU/*/*_poses.npz"))
-            self.sequences = self.sequences[-99:-98]
-            self.sequences = self.sequences*11000
-        elif subset == "cmu":
-            self.sequences = sorted(glob.glob(self.data_dir + "/CMU/*/*_poses.npz"))
-            self.sequences = self.sequences * 6
-        elif subset == "full":
-            self.sequences = sorted(glob.glob(self.data_dir + "/*/*/*_poses.npz"))
+        # subset = config.subset
+        # assert subset in ["oneseq", "cmu", "full"]
+        # if subset == "oneseq":
+        #     self.sequences = sorted(glob.glob(self.data_dir + "/CMU/*/*_poses.npz"))
+        #     self.sequences = self.sequences[-99:-98]
+        #     self.sequences = self.sequences*11000
+        # elif subset == "cmu":
+        #     self.sequences = sorted(glob.glob(self.data_dir + "/CMU/*/*_poses.npz"))
+        #     self.sequences = self.sequences * 6
+        # elif subset == "full":
+        #     self.sequences = sorted(glob.glob(self.data_dir + "/*/*/*_poses.npz"))
         
-        # self.sequences = sorted(glob.glob(self.data_dir + "/*.npz"))
+        self.sequences = sorted(glob.glob(self.data_dir + "/*.npz"))
 
         print("Number of sequences", len(self.sequences))
         self.smpl = SMPL(config.smpl_model_dir)
