@@ -119,9 +119,18 @@ class DDPM():
         sqrt_om_alpha_bar = sqrt_om_alpha_bar.to(device)
         om_alpha = om_alpha.to(device)
         
-        x_mat = torch.zeros((self.pretrained_config.n_time, n_test_points, self.pretrained_config.inp_dim), device=device)
-        x_mat[-1, :, :] = torch.randn((n_test_points, self.pretrained_config.inp_dim), device=device)
-        y_inp = torch.ones((n_test_points, self.pretrained_config.out_dim), device=device) * target_y
+        if self.problem == 'branin':
+            inp_dim = self.pretrained_config.inp_dim
+            out_dim = self.pretrained_config.out_dim
+        elif self.problem == 'pose':
+            inp_dim = self.pretrained_config.x_dim_1*self.pretrained_config.x_dim_2
+            out_dim = self.pretrained_config.y_dim_1*self.pretrained_config.y_dim_2
+        else:
+            raise ValueError("Unknown problem")
+        
+        x_mat = torch.zeros((self.pretrained_config.n_time, n_test_points, inp_dim), device=device)
+        x_mat[-1, :, :] = torch.randn((n_test_points, inp_dim), device=device)
+        y_inp = torch.ones((n_test_points, out_dim), device=device) * target_y
 
         with torch.no_grad():
             for it in trange(self.pretrained_config.n_time - 1, 0, -1):
