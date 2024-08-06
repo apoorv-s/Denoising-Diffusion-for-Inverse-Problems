@@ -1,16 +1,10 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 
-import os
-from tensorboardX import SummaryWriter
-from tqdm import trange
-
-from Core.Dataset import BraninDataset
 from Configs.Configs import BraninMLPConfig, BraninTransformerConfig
 from Core.Transformers import AttentionBlock, CrossAttentionBlock
 
-from Core.Utils import generate_discription, diffusion_noise_schedule, get_act_fn, ResNet
+from Core.Utils import get_act_fn, ResNet
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

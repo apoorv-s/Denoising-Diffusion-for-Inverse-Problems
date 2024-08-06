@@ -4,17 +4,11 @@ from torch.utils.data import Dataset
 import numpy as np
 import copy
 import glob
-from Core.Rotations import (
-    axis_angle_to_matrix,
-    matrix_to_rotation_6d,
-    rotation_6d_to_matrix,
-)
+from Core.Rotations import axis_angle_to_matrix, matrix_to_rotation_6d, rotation_6d_to_matrix
+
 from torch.utils.data.dataloader import default_collate
 
-from Core.VisualizationUtils import (SMPL, random_camera,
-                                     projection, j2d_to_y,
-                                     viz_smpl, show_points,
-                                     dcn)
+from Core.VisualizationUtils import SMPL, random_camera, projection, j2d_to_y, viz_smpl, show_points, dcn
 
 class BraninDataset(Dataset):
     def __init__(self, config):
@@ -67,6 +61,7 @@ class PoseModelDataset(Dataset):
         elif subset == "full":
             self.sequences = sorted(glob.glob(self.data_dir + "/*/*/*_poses.npz"))
         
+        # Use this when testing
         # self.sequences = sorted(glob.glob(self.data_dir + "/*.npz"))
 
         print("Number of sequences", len(self.sequences))
