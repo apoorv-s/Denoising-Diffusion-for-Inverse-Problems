@@ -1,6 +1,6 @@
 # Diffusion Model for Inverse Problems
 
-Using diffusion model to solve inverse problems.
+Using the Denoising Diffusion Probabilistic Model (DDPM) to solve ill-conditioned inverse problems.
 
 Report: 
 
